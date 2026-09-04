@@ -1,0 +1,6 @@
+account_id,ticker,sector,purchase_date,investment_dollars,purchase_price_rule,quantity_rule,active
+PORTFOLIO_5,GOOGL,Communication Services,2026-07-29,100,official_open,investment_dollars / official_open,true
+PORTFOLIO_5,IBKR,Financials,2026-07-29,100,official_open,investment_dollars / official_open,true
+PORTFOLIO_5,CIEN,Information Technology,2026-07-29,100,official_open,investment_dollars / official_open,true
+PORTFOLIO_5,SPGI,Financials,2026-07-29,100,official_open,investment_dollars / official_open,true
+PORTFOLIO_5,ADSK,Information Technology,2026-07-29,100,official_open,investment_dollars / official_open,true

@@ -1,0 +1,15 @@
+.env
+*.db
+*.db-journal
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+frontend/playwright-report/
+frontend/test-results/
+data/portfolio_tracker.db
+screenshots/

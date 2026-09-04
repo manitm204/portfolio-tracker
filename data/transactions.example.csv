@@ -1,0 +1,3 @@
+transaction_id,account_id,trade_date,ticker,transaction_type,shares,price,fees,cash_flow,source,notes
+example-1,PORTFOLIO_125,2026-07-24,GOOGL,BUY,1.57,,0,,FMP_OFFICIAL_OPEN,Price hydrated once during bootstrap
+example-2,PORTFOLIO_5,2026-07-29,GOOGL,BUY,,,0,-100,FMP_OFFICIAL_OPEN,Shares equal 100 divided by opening price

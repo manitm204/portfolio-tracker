@@ -1,148 +1,139 @@
-# Personal Portfolio Tracker
+# Portfolio Tracker
 
-A private, responsive two-account portfolio dashboard: FastAPI + SQLAlchemy + pandas backend,
-React + TypeScript + Vite + Tailwind + Plotly frontend, FMP market data, SQLite storage,
-APScheduler end-of-day refresh, Docker Compose deployment.
+A personal portfolio dashboard that tracks a real brokerage account day-to-day and puts
+institutional-grade performance and risk analytics — the kind normally locked inside
+brokerage/quant tooling — in front of a single investor.
 
-## Accounts
+It ingests an append-only transaction ledger (buys, sells, dividends, splits, deposits,
+withdrawals), reconstructs daily positions and cash from it, pulls in daily market data,
+and turns that history into time-weighted returns, benchmark comparisons, factor exposure,
+correlation/PCA diversification analysis, and more — refreshed automatically every trading day.
 
-- **`PORTFOLIO_125`** — ≈$5,000, 125 candidate rows, purchased at the **July 24, 2026** market
-  open. Active holdings use two-decimal share quantities from the official opening price.
-  `FDXF` is a zero-dollar inactive candidate kept as metadata and excluded from every statistic.
-- **`PORTFOLIO_5`** — $500; exactly $100 into each of GOOGL, IBKR, CIEN, SPGI, ADSK at the
-  **July 29, 2026** open. Fractional shares = `100 / official_open` at full float precision.
-- **Combined** — mathematically correct union: values sum per date, and the combined SPY/QQQ
-  benchmark receives each account's external flows on its own inception date.
+## Overview
 
-## Repository layout
+The landing page — current value, today's move, total return, CAGR, and excess return vs.
+SPY and QQQ side by side, a "growth of $100" chart since inception, and concentration stats
+(effective number of holdings, top-5/10/20 weight).
 
-```
-backend/          FastAPI app, analytics, ingestion, Alembic migrations, pytest suite
-frontend/         React dashboard (Vite, Tailwind, Plotly), Vitest + Playwright tests
-data/             Seed book CSVs + SQLite database (created at runtime)
-screenshots/      Captured desktop/mobile screenshots (dark + light)
-docker-compose.yml
-```
+![Overview](screenshots/overview.png)
 
-## Setup (local development)
+## Performance
 
-Prereqs: Python 3.11+, Node 20+.
+The deepest page in the app. For any selected range (inception, YTD, 1M/3M/6M/1Y, or a
+custom window):
 
-```bash
-# 1. Configure the environment (never commit .env)
-cp .env.example .env          # then put your real FMP key in FMP_API_KEY
+**Growth of $100** and **matched-cash-flow dollar value** vs. SPY/QQQ — benchmarks receive
+the same external cash flows on the same dates, so the comparison isn't distorted by when
+money came in or out — alongside **daily and cumulative time-weighted return**.
 
-# 2. Backend
-cd backend
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/alembic upgrade head              # create/migrate the SQLite schema
+![Performance — growth of $100, matched cash flow, daily & cumulative return](screenshots/performance-growth.png)
 
-# 3. One-time seed hydration (fetches official opens from FMP exactly once)
-.venv/bin/python -m app.cli bootstrap
+**Drawdown** vs. both benchmarks:
 
-# 4. First market-data refresh (prices + dividends/splits since inception)
-.venv/bin/python -m app.cli refresh
+![Performance — drawdown](screenshots/performance-drawdown.png)
 
-# 5. Run the API
-.venv/bin/uvicorn app.main:app --port 8000
+**Rolling statistics** — beta, annualized volatility, and correlation vs. SPY/QQQ — over
+30/90/252-day windows, plus a period-return table and a since-inception stats table (CAGR,
+volatility, max drawdown, Sharpe, Sortino, Calmar, beta, R², correlation, alpha, information
+ratio) for the portfolio, SPY, and QQQ side by side:
 
-# 6. Frontend (second terminal)
-cd ../frontend
-npm install
-npm run dev                                  # http://localhost:5173
-# If port 8000 is taken, run uvicorn on another port and:
-# VITE_API_URL=http://localhost:8001 npm run dev
-```
+![Performance — rolling beta, volatility, correlation](screenshots/performance-rolling.png)
 
-`python -m app.cli status` prints hydration/refresh state at any time.
+A **GitHub-style daily return calendar** and a **monthly returns heatmap**:
 
-### Hydrating real data — the single command
+![Performance — daily return calendar and monthly returns](screenshots/performance-calendar.png)
 
-If the code was developed against fixtures or the key was unavailable, the one command that
-hydrates real data once `FMP_API_KEY` is set:
+A **Monte Carlo simulator** — it compares the actual stock picks against N random,
+equal-weight, same-size baskets drawn from the S&P 500 universe, all invested on the same
+date, and reports what percentile the real picks landed in against pure chance. The chart
+below shows the actual portfolio (blue) threading through 50 random-pick simulations,
+beating the median and mean of chance selection:
 
-```bash
-cd backend && .venv/bin/python -m app.cli bootstrap && .venv/bin/python -m app.cli refresh
-```
+![Performance — Monte Carlo: stock picking vs. random selection](screenshots/monte-carlo.png)
 
-Bootstrap is guarded by `bootstrap_state` and unique source keys — running it again is a no-op.
-Refresh is incremental and idempotent: run it as often as you like.
+## Holdings
 
-## Updates
+A sortable, searchable table of every position (shares, cost basis, price, weight, day and
+total return, beta, beta contribution), a sector-allocation donut, and a holdings treemap
+(tile size = value, color = today's return) — plus a top-holdings bar chart, a concentration
+curve, target-vs-current drift, and per-holding return contribution further down the page.
 
-- **Automatic**: APScheduler fires an EOD refresh Mon–Fri at `EOD_REFRESH_TIME`
-  (default 18:00 `America/New_York`) inside the backend process.
-- **Manual**: the ⟳ Refresh button in the header, or `POST /api/refresh`, or the CLI.
-- Bars fetched during the trading session are marked *provisional* (an "intraday" badge is
-  shown) and re-fetched at the next refresh. Per-symbol sync state, coverage and failures are
-  on the **Data Quality** page.
-- Future buys/sells/deposits/withdrawals/dividends/fees/splits/symbol changes need only a new
-  transaction row — via CSV import on the Transactions page (schema:
-  `data/transactions.example.csv`) — never a code change.
+![Holdings — table, sector allocation, treemap](screenshots/holdings.png)
 
-## Tests
+## Heatmap
 
-```bash
-# Backend: finance acceptance tests + API integration (29 tests)
-cd backend && .venv/bin/python -m pytest tests
+A SPY-style sector treemap of the whole book — tile size is portfolio weight, color is
+return over the selected period (daily/weekly/monthly/since-inception) — plus a
+weight-weighted sector performance bar chart.
 
-# Frontend unit (Vitest + Testing Library)
-cd frontend && npm test
+![Heatmap — sector treemap, since inception](screenshots/heatmap.png)
 
-# End-to-end (Playwright; needs backend :8000 + hydrated data; browser: npx playwright install chromium)
-cd frontend && npx playwright test
-# against a non-default port: PW_BASE_URL=http://localhost:5174 npx playwright test
-```
+## Risk
 
-## Docker
+The quant toolbox: trailing beta and correlation vs. SPY/QQQ, historical VaR/CVaR at 95% and
+99%, security beta contributions, and contribution to risk by holding and by sector — plus
+two deeper diversification views.
 
-Prereqs: the Docker Compose plugin (`docker compose version` should work) and a user in the
-`docker` group (or run with `sudo`). Ports are overridable when 8000/3000 are taken:
-`BACKEND_PORT=8010 FRONTEND_PORT=3010 docker compose up`.
+**Diversification via PCA** — principal component analysis on the trailing correlation
+matrix of current holdings: effective number of independent bets (not just position count), a
+variance-explained scree plot, and the dominant factor's top loadings.
 
-```bash
-cp .env.example .env      # set FMP_API_KEY
-docker compose up --build # frontend at http://localhost:3000, API at :8000
-# hydrate inside the container (first run only):
-docker compose exec backend python -m app.cli bootstrap
-docker compose exec backend python -m app.cli refresh
-```
+![Risk — PCA diversification](screenshots/risk-pca.png)
 
-The SQLite DB persists in `./data/portfolio_tracker.db` via the volume mount. The schema is
-managed by Alembic; the models keep to portable column types so the `DATABASE_URL` can point
-at PostgreSQL later without code changes.
+**Correlation matrix** — full pairwise Pearson correlation across holdings, so you can see
+directly which positions actually move together instead of inferring it from sector labels.
 
-## Financial methodology (summary — full version on the in-app Methodology page)
+![Risk — correlation matrix](screenshots/risk-correlation.png)
 
-- **Ledger**: append-only transactions (BUY/SELL/DIVIDEND/DEPOSIT/WITHDRAWAL/FEE/SPLIT/
-  SYMBOL_CHANGE). Daily positions and cash are reconstructed from the ledger; nothing is
-  edited in place. Machine-generated rows carry unique source keys, so hydration, dividend
-  detection and CSV import can never duplicate.
-- **Official fills**: opening prices fetched once at bootstrap, stored immutably, never
-  recomputed from newer data. Where two-decimal rounding pushed the 125-book's cost slightly
-  above $5,000, the initial deposit records the actual amount spent (documented on the
-  transaction), so cash is never negative and benchmarks receive the true external flow.
-- **Prices**: raw OHLC and dividend-adjusted closes stored side by side. Market value = raw
-  close × actual shares; per-ticker return series use adjusted closes. Never mixed silently.
-- **Calendar**: trading days = dates with a SPY bar. Missing symbol prices are forward-filled
-  (0% return for that symbol, never zero value, never fabricated) and flagged in Data Quality.
-- **TWR**: `r_t = MV_t / (MV_{t-1} + F_t) − 1` with start-of-day external flows; geometric
-  linking. Same-day flows create no false performance.
-- **XIRR**: bisection on the NPV of dated external flows + terminal value; annualized (read
-  early-life values with the annualization caveat shown in the UI).
-- **Benchmarks**: SPY/QQQ receive the identical external flows on the identical dates,
-  entering at that session's (adjusted) open; distributions reinvested via adjusted prices.
-  The combined benchmark respects both inception dates.
-- **Beta**: `cov(r_p, r_SPY) / var(r_SPY)` on aligned daily returns — never a weighted
-  average of vendor betas. The security-level "β·w" view is separately labelled. All risk
-  statistics enforce configurable minimum observations and render "insufficient history".
-- **Dividends**: credited on the ex-date (shares held before ex-date × per-share amount)
-  until the payment date passes; declared-but-future ex-dates are never materialized early.
-- **Splits**: multiply shares with zero economic return, applied from the effective date.
+Also on this page: **factor exposure** to momentum, value, quality, low-volatility, and
+small-cap style ETFs, to surface style concentration that sector diversification alone
+wouldn't catch.
 
-## Security
+## History
 
-- `FMP_API_KEY` is read only by the backend process (`backend/app/config.py`), never enters
-  the frontend bundle or API responses, and httpx request-URL logging is capped to keep the
-  key out of logs. `.env` is git-ignored; only `.env.example` is committed.
+Fully closed-out positions with realized gain and CAGR, and a timeline of composition-change
+events — what was added/removed and how sector allocation shifted at each rebalance. The
+snapshot below is a real rebalance this account went through, captured with before/after
+holdings and sector mix:
+
+![History — closed positions and rebalance event](screenshots/history-rebalance.png)
+
+## Transactions
+
+The full, append-only ledger — every buy, sell, dividend, deposit, withdrawal, fee, split,
+and symbol change — filterable and searchable, with CSV import/export so new activity is a
+data change, never a code change. The rebalance visible above (swapping CIEN/SPGI/ADSK for
+ROST/NUE/ABBV) is just new rows here — no code changes required.
+
+![Transactions — full ledger](screenshots/transactions.png)
+
+## Data Quality
+
+A transparency page: sync status per symbol, stale/failed price fetches, and refresh-run
+history, so it's always clear how fresh and complete the underlying data is.
+
+---
+
+## How it works, in short
+
+- **Ledger-first**: nothing is ever edited in place — daily positions, cash, and returns are all
+  reconstructed from an append-only transaction log.
+- **Time-weighted returns (TWR)** for performance that isn't distorted by when cash moved in or
+  out, geometrically linked daily; **XIRR** for money-weighted, dollar-actual returns.
+- **Benchmarks** (SPY, QQQ) receive the identical external cash flows on the identical dates, so
+  "vs. benchmark" comparisons are apples-to-apples.
+- **Beta, alpha, VaR/CVaR, factor exposure, and PCA-based diversification** are computed directly
+  from daily return history — never approximated from vendor betas or static weights.
+- Prices refresh automatically on a daily schedule; intraday data is marked provisional until
+  the next end-of-day pass confirms it.
+
+Full methodology — the exact formulas, edge-case handling, and invariants — is documented on the
+in-app **Methodology** page and in [PROJECT_SPEC.md](PROJECT_SPEC.md).
+
+## Stack
+
+FastAPI + SQLAlchemy + pandas backend · React + TypeScript + Vite + Tailwind + Plotly frontend ·
+Financial Modeling Prep (FMP) market data · SQLite storage · APScheduler for end-of-day refresh ·
+Docker Compose for deployment.
+
+For setup and local development instructions, see [SETUP.md](SETUP.md).

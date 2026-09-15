@@ -12,4 +12,3 @@ dist/
 frontend/playwright-report/
 frontend/test-results/
 data/portfolio_tracker.db
-screenshots/

@@ -2,9 +2,8 @@ const SECTIONS: { title: string; body: string[] }[] = [
   {
     title: "Accounts & bootstrap",
     body: [
-      "Two genuinely separate accounts: PORTFOLIO_125 (≈$5,000, 125 candidate rows, purchased at the July 24 2026 market open with two-decimal share quantities) and PORTFOLIO_5 ($500, exactly $100 into each of GOOGL, IBKR, CIEN, SPGI, ADSK at the July 29 2026 open with full-precision fractional shares).",
-      "The official opening prices were fetched from FMP exactly once at bootstrap, stored as immutable fills, and are never recomputed from newer data. FDXF is an inactive zero-dollar candidate: it is kept as metadata and excluded from every statistic.",
-      "Where two-decimal share rounding pushed the actual cost of the 125-stock book slightly above $5,000, the initial deposit records the actual amount spent, so cash never goes negative and benchmarks receive the true external flow.",
+      "PORTFOLIO_5 ($500, exactly $100 into each of GOOGL, IBKR, CIEN, SPGI, ADSK at the July 29 2026 open, full-precision fractional shares).",
+      "The official opening prices were fetched from FMP exactly once at bootstrap, stored as immutable fills, and are never recomputed from newer data.",
     ],
   },
   {
@@ -34,8 +33,7 @@ const SECTIONS: { title: string; body: string[] }[] = [
   {
     title: "Benchmarks",
     body: [
-      "SPY and QQQ receive the identical external cash flows on the identical dates as the account — including each account's inception deposit at that day's opening price. Distributions are reinvested via adjusted prices.",
-      "The combined benchmark receives both accounts' flows on their own inception dates (July 24 and July 29), so differing inceptions are respected by construction. A cash-flow-affected portfolio is never compared against a simple buy-and-hold line.",
+      "SPY and QQQ receive the identical external cash flows on the identical dates as the account — including the inception deposit at that day's opening price. Distributions are reinvested via adjusted prices. A cash-flow-affected portfolio is never compared against a simple buy-and-hold line.",
     ],
   },
   {

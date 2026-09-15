@@ -1,22 +1,17 @@
 # Portfolio Tracker — Product and Engineering Specification
 
+> **Note:** This spec originally covered two accounts, `PORTFOLIO_125` and `PORTFOLIO_5`, plus a
+> `combined` pseudo-account view. The 125-stock portfolio and the combined view were retired; the
+> product now tracks a single account, `PORTFOLIO_5`. Sections below that still describe the
+> retired account or combined view are kept as historical record of the original design.
+
 ## Product goal
 
-Build a private, responsive portfolio-tracking website for two genuinely separate investment accounts. It must show how each account has performed since its own inception, compare it fairly with SPY and QQQ, explain allocation and risk, and support end-of-day updates plus manual refreshes.
+Build a private, responsive portfolio-tracking website for a personal investment account. It must show how the account has performed since inception, compare it fairly with SPY and QQQ, explain allocation and risk, and support end-of-day updates plus manual refreshes.
 
 This is a tracking and analytics product, not a trade-recommendation engine.
 
-## Canonical accounts
-
-### $5K · 125 Stock Portfolio
-
-- Account ID: `PORTFOLIO_125`
-- Purchase date: July 24, 2026
-- Purchase price: official market opening price on July 24, 2026
-- Quantity: two-decimal quantity per holding
-- Seed allocation: `data/portfolio_125_seed.csv`
-- Retain sector, composite score, target weight, and target dollars as original-model metadata.
-- `FDXF` has zero dollars and zero shares. Preserve it as inactive metadata but exclude it from holdings count, value, return, allocation, concentration, beta, and every portfolio statistic.
+## Canonical account
 
 ### $500 · 5 Stock Portfolio
 
@@ -51,10 +46,6 @@ This is a tracking and analytics product, not a trade-recommendation engine.
 
 ## Required navigation
 
-- Global account switcher:
-  - `$5K · 125 Stocks`
-  - `$500 · 5 Stocks`
-  - `Combined`
 - Date-range controls: since inception, YTD, 1M, 3M, 6M, 1Y, and custom.
 - Manual refresh control with loading, success, partial-failure, and error states.
 - Responsive desktop, tablet, and mobile layouts.

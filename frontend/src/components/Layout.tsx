@@ -19,10 +19,9 @@ const NAV = [
 ];
 
 export default function Layout() {
-  const { accountId, setAccountId, dark, toggleTheme } = useAppState();
+  const { accountId, dark, toggleTheme } = useAppState();
   const [menuOpen, setMenuOpen] = useState(false);
   const qc = useQueryClient();
-  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
   const summary = useQuery({
     queryKey: ["summary", accountId],
     queryFn: () => api.summary(accountId),
@@ -98,25 +97,6 @@ export default function Layout() {
           >
             ☰
           </button>
-          {/* Account switcher */}
-          <div className="flex overflow-hidden rounded-lg border border-[var(--border)]" role="tablist" aria-label="Account">
-            {(accounts.data ?? []).map((a) => (
-              <button
-                key={a.id}
-                role="tab"
-                aria-selected={accountId === a.id}
-                onClick={() => setAccountId(a.id)}
-                className={clsx(
-                  "px-3 py-1.5 text-xs font-medium sm:text-sm whitespace-nowrap",
-                  accountId === a.id
-                    ? "bg-[var(--series-portfolio)] text-white"
-                    : "text-[var(--text-secondary)] hover:bg-[var(--grid)]",
-                )}
-              >
-                {a.display_name}
-              </button>
-            ))}
-          </div>
           <div className="ml-auto flex items-center gap-2">
             {refreshState && <span className={clsx("hidden text-xs sm:inline", refreshState.cls)}>{refreshState.label}</span>}
             {fresh?.as_of_provisional && (

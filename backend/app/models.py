@@ -237,17 +237,6 @@ class IndexConstituent(Base):
     )
 
 
-class MarketCapCache(Base):
-    """Cached market capitalization per ticker, used to market-cap-weight the
-    125-stock Monte Carlo simulations. Refreshed periodically."""
-
-    __tablename__ = "market_cap_cache"
-
-    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
-    market_cap: Mapped[float] = mapped_column(Float)
-    fetched_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow
-    )
 
 
 class BootstrapState(Base):

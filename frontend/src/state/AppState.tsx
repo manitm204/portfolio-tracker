@@ -16,7 +16,7 @@ const Ctx = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [accountId, setAccountId] = useState(
-    () => localStorage.getItem("accountId") ?? "PORTFOLIO_125",
+    () => localStorage.getItem("accountId") ?? "PORTFOLIO_5",
   );
   const [dark, setDark] = useState(() => localStorage.getItem("theme") !== "light");
   const [range, setRange] = useState("SI");

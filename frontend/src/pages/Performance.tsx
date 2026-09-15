@@ -25,16 +25,13 @@ const STATS_ROWS: { key: keyof RiskComparisonRow; label: string; fmt: (v: number
   { key: "information_ratio_spy", label: "Information ratio (vs SPY)", fmt: (v) => (v !== null ? fmtNum(v) : "—"), signed: true },
 ];
 
-const MONTE_CARLO_ACCOUNTS = new Set(["PORTFOLIO_5", "PORTFOLIO_125"]);
+const MONTE_CARLO_ACCOUNTS = new Set(["PORTFOLIO_5"]);
 const MONTE_CARLO_DEFAULT_SIMS: Record<string, number> = {
   PORTFOLIO_5: 50,
-  PORTFOLIO_125: 30, // each sim needs ~124 tickers' price + market-cap data — slower cold-cache
 };
 const MONTE_CARLO_HINT: Record<string, string> = {
   PORTFOLIO_5:
     "Compares the actual equal-weight portfolio to N random same-size stock picks from the S&P 500, all invested equally on the same inception date and held (buy-and-hold, adjusted-close pricing).",
-  PORTFOLIO_125:
-    "Compares the actual portfolio to N random same-size stock picks from the S&P 500, built with the same methodology: market-cap weighted within each sector, scaled to match the real portfolio's sector exposure, capped at 10% per position (excess redistributed).",
 };
 
 const RANGES = ["SI", "YTD", "1M", "3M", "6M", "1Y", "custom"];

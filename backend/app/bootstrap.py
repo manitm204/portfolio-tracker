@@ -42,7 +42,6 @@ DATA_DIR = PROJECT_ROOT / "data"
 # ---------------------------------------------------------------------------
 def load_seed_book(db: Session, data_dir: Path = DATA_DIR) -> None:
     _load_accounts(db, data_dir / "accounts.csv")
-    _load_targets_125(db, data_dir / "portfolio_125_seed.csv")
     _load_targets_5(db, data_dir / "portfolio_5_seed.csv")
     db.commit()
 
@@ -72,23 +71,6 @@ def _upsert_target(db: Session, account_id: str, ticker: str, **fields) -> None:
     else:
         for k, v in fields.items():
             setattr(existing, k, v)
-
-
-def _load_targets_125(db: Session, path: Path) -> None:
-    with path.open() as f:
-        for row in csv.DictReader(f):
-            _upsert_target(
-                db,
-                row["account_id"],
-                row["ticker"],
-                sector=row["sector"],
-                composite_score=float(row["composite_score"])
-                if row["composite_score"]
-                else None,
-                target_weight_pct=float(row["target_weight_pct"]),
-                target_dollars=float(row["target_dollars"]),
-                active=row["active"].strip().lower() == "true",
-            )
 
 
 def _load_targets_5(db: Session, path: Path) -> None:
@@ -176,27 +158,15 @@ def hydrate_account(
             return result
 
         # Pre-compute total cost so the initial deposit can cover the actual
-        # fills. Two-decimal share rounding can push the total cost slightly
-        # above the planned starting cash; the true external flow is whatever
-        # funded the purchases, so the deposit is max(starting_cash, cost).
-        planned_cost = 0.0
-        for t in targets:
-            open_price = opens[t.ticker]
-            if account_id == "PORTFOLIO_5":
-                planned_cost += t.target_dollars
-            else:
-                planned_cost += round(t.target_dollars / open_price, 2) * open_price
-        # Ceil to the next cent so residual cash is never negative dust.
-        import math
-
-        deposit_amount = max(
-            account.starting_cash, math.ceil(planned_cost * 100 - 1e-9) / 100
-        )
+        # fills (each target is an exact-dollar purchase, so this equals
+        # starting_cash unless the book was hand-edited).
+        planned_cost = sum(t.target_dollars for t in targets)
+        deposit_amount = max(account.starting_cash, planned_cost)
         deposit_note = "Initial funding"
         if deposit_amount != account.starting_cash:
             deposit_note = (
                 f"Initial funding (planned {account.starting_cash:.2f}, raised to cover "
-                f"two-decimal share rounding on the seed fills)"
+                f"the seed fills)"
             )
         db.add(
             Transaction(
@@ -213,13 +183,9 @@ def hydrate_account(
 
         for t in targets:
             open_price = opens[t.ticker]
-            if account_id == "PORTFOLIO_5":
-                # Exactly $100 cash purchase; shares keep full precision.
-                cost = t.target_dollars
-                shares = cost / open_price
-            else:
-                shares = round(t.target_dollars / open_price, 2)
-                cost = shares * open_price
+            # Exact-dollar purchase; shares keep full precision.
+            cost = t.target_dollars
+            shares = cost / open_price
             db.add(
                 Transaction(
                     account_id=account_id,

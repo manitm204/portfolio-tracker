@@ -39,7 +39,7 @@ def db(engine) -> Session:
 # ---------------------------------------------------------------------------
 # Deterministic fixture data
 # ---------------------------------------------------------------------------
-D0 = dt.date(2026, 7, 24)  # Friday — PORTFOLIO_125-style inception
+D0 = dt.date(2026, 7, 24)  # Friday
 D1 = dt.date(2026, 7, 27)  # Monday
 D2 = dt.date(2026, 7, 28)
 D3 = dt.date(2026, 7, 29)

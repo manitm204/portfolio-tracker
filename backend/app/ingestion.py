@@ -26,7 +26,6 @@ from .fmp_client import FMPClient, FMPError
 from .models import (
     Account,
     IndexConstituent,
-    MarketCapCache,
     ModelTarget,
     PriceBar,
     RebalanceEvent,
@@ -386,61 +385,6 @@ def ensure_sp500_constituents(
             .distinct()
         )
     )
-
-
-def sp500_sector_universe(db: Session) -> dict[str, list[str]]:
-    """Cached S&P 500 tickers grouped by normalized (GICS-style) sector.
-
-    Call ``ensure_sp500_constituents`` first to (re)populate the cache.
-    """
-    out: dict[str, list[str]] = {}
-    rows = db.execute(
-        select(IndexConstituent.sector, IndexConstituent.ticker).where(
-            IndexConstituent.index_name == "sp500", IndexConstituent.sector.isnot(None)
-        )
-    ).all()
-    for sector, ticker in rows:
-        out.setdefault(sector, []).append(ticker)
-    return {s: sorted(set(ts)) for s, ts in out.items()}
-
-
-def ensure_market_caps(
-    db: Session, client: FMPClient, symbols: list[str], max_age_days: int = 30
-) -> dict[str, float]:
-    """Cached market caps for ``symbols``, fetching missing/stale ones from FMP."""
-    cutoff = utcnow() - dt.timedelta(days=max_age_days)
-    cached = {
-        row.ticker: row
-        for row in db.execute(
-            select(MarketCapCache).where(MarketCapCache.ticker.in_(symbols))
-        ).scalars()
-    }
-    out: dict[str, float] = {}
-    for sym in symbols:
-        row = cached.get(sym)
-        fetched_at = row.fetched_at if row else None
-        if fetched_at is not None and fetched_at.tzinfo is None:
-            fetched_at = fetched_at.replace(tzinfo=dt.timezone.utc)
-        if row is not None and fetched_at is not None and fetched_at > cutoff:
-            out[sym] = row.market_cap
-            continue
-        try:
-            cap = client.market_cap(sym)
-        except FMPError:
-            cap = None
-        if cap is None or cap <= 0:
-            if row is not None:
-                out[sym] = row.market_cap  # fall back to stale cache over nothing
-            continue
-        if row is None:
-            row = MarketCapCache(ticker=sym, market_cap=cap)
-            db.add(row)
-        else:
-            row.market_cap = cap
-        row.fetched_at = utcnow()
-        db.commit()
-        out[sym] = cap
-    return out
 
 
 # ---------------------------------------------------------------------------

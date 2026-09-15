@@ -119,14 +119,6 @@ class FMPClient:
         data = self._get(f"{index}-constituent")
         return data if isinstance(data, list) else []
 
-    def market_cap(self, symbol: str) -> float | None:
-        """Latest market capitalization, or None if unavailable."""
-        data = self._get("market-capitalization", symbol=symbol)
-        if isinstance(data, list) and data:
-            cap = data[0].get("marketCap")
-            return float(cap) if cap is not None else None
-        return None
-
 
 def _redact(text: str, key: str) -> str:
     return text.replace(key, "***") if key else text

@@ -1,4 +1,4 @@
-"""Acceptance tests: seed hydration, FDXF exclusion, $500 reconciliation, CSV io."""
+"""Acceptance tests: seed hydration, $500 reconciliation, CSV io."""
 
 from __future__ import annotations
 
@@ -9,13 +9,7 @@ from sqlalchemy import select
 
 from app.bootstrap import hydrate_account, load_seed_book
 from app.csv_io import export_transactions, import_transactions
-from app.models import OfficialFill, Transaction, TransactionType
-from app.services import AccountContext, holdings_payload, summary_payload
-
-from .conftest import add_bars
-
-D125 = dt.date(2026, 7, 24)
-D5 = dt.date(2026, 7, 29)
+from app.models import Transaction, TransactionType
 
 
 class FakeFMP:
@@ -71,20 +65,12 @@ def test_seed_book_loads_all_targets(seeded):
     from app.models import ModelTarget
 
     db = seeded
-    t125 = (
-        db.execute(select(ModelTarget).where(ModelTarget.account_id == "PORTFOLIO_125"))
-        .scalars()
-        .all()
-    )
     t5 = (
         db.execute(select(ModelTarget).where(ModelTarget.account_id == "PORTFOLIO_5"))
         .scalars()
         .all()
     )
-    assert len(t125) == 125
     assert len(t5) == 5
-    fdxf = [t for t in t125 if t.ticker == "FDXF"]
-    assert len(fdxf) == 1 and fdxf[0].active is False and fdxf[0].target_dollars == 0
 
 
 def test_five_stock_hydration_reconciles_to_500(seeded):
@@ -108,37 +94,6 @@ def test_five_stock_hydration_reconciles_to_500(seeded):
         assert t.shares == pytest.approx(100.0 / 250.0, rel=1e-9)  # full precision kept
         assert -t.cash_flow == pytest.approx(100.0, abs=1e-12)
     assert result.residual_cash == pytest.approx(0.0, abs=1e-9)
-
-
-def test_125_hydration_two_decimal_shares_and_residual_cash(seeded):
-    db = seeded
-    fake = FakeFMP(open_price=97.0)
-    result = hydrate_account(db, "PORTFOLIO_125", client=fake)
-    assert result.hydrated and result.fills == 124  # FDXF excluded
-    txns = (
-        db.execute(
-            select(Transaction).where(
-                Transaction.account_id == "PORTFOLIO_125",
-                Transaction.type == TransactionType.BUY,
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert len(txns) == 124
-    assert all(t.ticker != "FDXF" for t in txns)
-    for t in txns:
-        assert round(t.shares, 2) == pytest.approx(t.shares)  # two-decimal quantities
-        assert t.cash_flow == pytest.approx(-(t.shares * 97.0))
-    deposit = db.execute(
-        select(Transaction).where(
-            Transaction.account_id == "PORTFOLIO_125",
-            Transaction.type == TransactionType.DEPOSIT,
-        )
-    ).scalar_one()
-    assert deposit.cash_flow == 5000.0
-    assert result.residual_cash == pytest.approx(5000.0 - result.total_cost)
-    assert db.execute(select(OfficialFill)).scalars().first() is not None
 
 
 def test_hydration_is_idempotent(seeded):
@@ -167,45 +122,6 @@ def test_hydration_all_or_nothing_on_missing_open(seeded):
     assert (
         db.execute(select(Transaction)).scalars().first() is None
     )  # nothing committed
-
-
-def test_fdxf_contributes_zero_to_all_statistics(seeded, spy_qqq):
-    db = seeded
-    hydrate_account(db, "PORTFOLIO_125", client=FakeFMP(open_price=100.0))
-    # Price bars for every hydrated ticker over the fixture window
-    from app.models import ModelTarget
-
-    tickers = (
-        db.execute(
-            select(ModelTarget.ticker).where(
-                ModelTarget.account_id == "PORTFOLIO_125", ModelTarget.active.is_(True)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for t in tickers:
-        add_bars(
-            db,
-            t,
-            {
-                dt.date(2026, 7, 27): 102.0,
-                dt.date(2026, 7, 28): 103.0,
-                dt.date(2026, 7, 29): 104.0,
-            },
-        )
-    db.commit()
-
-    ctx = AccountContext(db, "PORTFOLIO_125")
-    payload = holdings_payload(ctx)
-    tickers_out = {h["ticker"] for h in payload["holdings"]}
-    assert "FDXF" not in tickers_out
-    assert any(r["ticker"] == "FDXF" for r in payload["inactive"])
-    summary = summary_payload(ctx)
-    assert summary["concentration"]["num_holdings"] == 124
-    # weights are rounded to 6dp individually; allow that rounding to accumulate
-    weights_sum = sum(h["weight"] for h in payload["holdings"])
-    assert weights_sum == pytest.approx(1.0, abs=1e-4)
 
 
 def test_csv_import_export_roundtrip_idempotent(db, spy_qqq):

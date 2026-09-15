@@ -57,12 +57,9 @@ ROLLING_WINDOWS = (30, 90, 252)
 # on-demand fetch — see ``_trailing_returns``.
 TRAILING_TRADING_DAYS = 252
 
-# Accounts the Monte Carlo comparison can simulate, and how each is weighted:
-# PORTFOLIO_5 is equal-weight; PORTFOLIO_125 is market-cap weighted within
-# each sector (matching the real portfolio's sector exposure), capped at 10%
-# per position with the excess redistributed.
-MONTE_CARLO_ACCOUNTS = {"PORTFOLIO_5", "PORTFOLIO_125"}
-MONTE_CARLO_POSITION_CAP = 0.10
+# Accounts the Monte Carlo comparison can simulate: equal dollars across N
+# randomly chosen S&P 500 tickers, same convention as the real portfolio.
+MONTE_CARLO_ACCOUNTS = {"PORTFOLIO_5"}
 
 
 class UnknownAccount(Exception):
@@ -983,57 +980,23 @@ def monte_carlo_payload(
     if not targets or actual.empty:
         return {"account": ctx.key, "empty": True}
 
-    from .ingestion import (
-        ensure_adjusted_history,
-        ensure_market_caps,
-        ensure_sp500_constituents,
-        sp500_sector_universe,
-    )
+    from .ingestion import ensure_adjusted_history, ensure_sp500_constituents
 
     rng = np.random.default_rng(seed)
     db = ctx.db
 
-    if ctx.key == "PORTFOLIO_5":
-        method = "equal_weight"
-        n = len(targets)
-        with FMPClient() as client:
-            universe = sorted(set(ensure_sp500_constituents(db, client)) - {"SPY", "QQQ"})
-            picks = mc.sample_universe(universe, n, sims, rng)
-            needed = sorted({t for pick in picks for t in pick})
-            ensure_adjusted_history(db, client, needed, ctx.inception, ctx.today)
+    method = "equal_weight"
+    n = len(targets)
+    with FMPClient() as client:
+        universe = sorted(set(ensure_sp500_constituents(db, client)) - {"SPY", "QQQ"})
+        picks = mc.sample_universe(universe, n, sims, rng)
+        needed = sorted({t for pick in picks for t in pick})
+        ensure_adjusted_history(db, client, needed, ctx.inception, ctx.today)
 
-        adj_filled = _adj_close_matrix(db, needed, ctx)
-        curves = [mc.equal_weight_growth_of_100(adj_filled, pick) for pick in picks]
-        sim_tickers = picks
-        universe_size = len(universe)
-    else:
-        method = "sector_market_cap_weighted"
-        sector_weight_pct: dict[str, float] = {}
-        sector_count: dict[str, int] = {}
-        for t in targets:
-            sector_weight_pct[t.sector] = (
-                sector_weight_pct.get(t.sector, 0.0) + t.target_weight_pct
-            )
-            sector_count[t.sector] = sector_count.get(t.sector, 0) + 1
-        sector_target = {s: w / 100.0 for s, w in sector_weight_pct.items()}
-
-        with FMPClient() as client:
-            ensure_sp500_constituents(db, client)
-            universe_by_sector = sp500_sector_universe(db)
-            draws = mc.sample_sector_matched(universe_by_sector, sector_count, sims, rng)
-            needed = sorted({t for draw in draws for ts in draw.values() for t in ts})
-            ensure_adjusted_history(db, client, needed, ctx.inception, ctx.today)
-            market_caps = ensure_market_caps(db, client, needed)
-
-        adj_filled = _adj_close_matrix(db, needed, ctx)
-        curves: list[pd.Series] = []
-        sim_tickers: list[list[str]] = []
-        for draw in draws:
-            raw = mc.market_cap_sector_weights(draw, market_caps, sector_target)
-            weights = mc.cap_weights(raw, cap=MONTE_CARLO_POSITION_CAP)
-            curves.append(mc.weighted_growth_of_100(adj_filled, weights))
-            sim_tickers.append(sorted({t for ts in draw.values() for t in ts}))
-        universe_size = sum(len(v) for v in universe_by_sector.values())
+    adj_filled = _adj_close_matrix(db, needed, ctx)
+    curves = [mc.equal_weight_growth_of_100(adj_filled, pick) for pick in picks]
+    sim_tickers = picks
+    universe_size = len(universe)
 
     stats = mc.summarize(curves, ctx.calendar)
     sims_payload = [

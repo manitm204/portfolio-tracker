@@ -31,7 +31,7 @@ from .analytics import diversification as div
 from .analytics.positions import daily_positions, external_flow_list, load_ledger
 from .config import get_settings
 from .fmp_client import FMPClient
-from .ingestion import FACTOR_ETFS, TRAILING_LOOKBACK_CALENDAR_DAYS
+from .ingestion import FACTOR_ETFS, SECTOR_ETFS, TRAILING_LOOKBACK_CALENDAR_DAYS
 from .models import (
     Account,
     ModelTarget,
@@ -116,6 +116,7 @@ class AccountContext:
         self.inception: dt.date = min(a.start_date for a in accounts)
         self.benchmarks = ["SPY", "QQQ"]
         self.factor_etfs = list(FACTOR_ETFS)
+        self.sector_etfs = SECTOR_ETFS
 
         self.ledger = load_ledger(db, self.account_ids)
         self.today = dt.date.today()
@@ -128,7 +129,7 @@ class AccountContext:
         self.tickers = tickers
         frame = load_price_frame(
             db,
-            tickers + self.benchmarks + self.factor_etfs,
+            tickers + self.benchmarks + self.factor_etfs + list(self.sector_etfs.values()),
             self.inception,
             self.today,
         )
@@ -139,11 +140,15 @@ class AccountContext:
         self.factor_frames = {
             f: frame[frame["ticker"] == f].copy() for f in self.factor_etfs
         }
+        sector_etf_adj = close_matrix(
+            frame[frame["ticker"].isin(self.sector_etfs.values())], "adj_close"
+        )
 
         raw_closes = close_matrix(frame[frame["ticker"].isin(tickers)], "close")
         adj_closes = close_matrix(frame[frame["ticker"].isin(tickers)], "adj_close")
         self.closes, self.missing = ffill_with_coverage(raw_closes, self.calendar)
         self.adj_closes, _ = ffill_with_coverage(adj_closes, self.calendar)
+        self.sector_etf_closes, _ = ffill_with_coverage(sector_etf_adj, self.calendar)
         # adjusted daily returns per ticker (corporate-action safe)
         self.ticker_returns = (
             self.adj_closes.pct_change()
@@ -875,6 +880,25 @@ def risk_payload(ctx: AccountContext) -> dict:
 HEATMAP_PERIODS = ("1D", "1W", "1M", "SI")
 
 
+def _price_period_return(ser: pd.Series, period: str, end: pd.Timestamp) -> float | None:
+    """Simple price return over ``period`` ending at ``end``, from a series
+    already forward-filled onto the account's trading calendar. ``period ==
+    "SI"`` uses the series' first calendar observation (account inception) as
+    the base."""
+    ser = ser.dropna()
+    if len(ser) < 2:
+        return None
+    if period == "1D":
+        return float(ser.iloc[-1] / ser.iloc[-2] - 1.0)
+    if period == "SI":
+        return float(ser.iloc[-1] / ser.iloc[0] - 1.0)
+    delta = {"1W": pd.Timedelta(days=7), "1M": pd.DateOffset(months=1)}[period]
+    cutoff = end - delta
+    base = ser[ser.index <= cutoff]
+    base_val = base.iloc[-1] if len(base) else ser.iloc[0]
+    return float(ser.iloc[-1] / base_val - 1.0)
+
+
 def heatmap_payload(ctx: AccountContext, period: str = "1D") -> dict:
     if period not in HEATMAP_PERIODS:
         period = "1D"
@@ -896,18 +920,7 @@ def heatmap_payload(ctx: AccountContext, period: str = "1D") -> dict:
             if cb and cb.get("cost"):
                 ret = float(value) / cb["cost"] - 1.0
         elif end is not None and ticker in ctx.adj_closes.columns:
-            ser = ctx.adj_closes[ticker].dropna()
-            if len(ser) >= 2:
-                if period == "1D":
-                    ret = float(ser.iloc[-1] / ser.iloc[-2] - 1.0)
-                else:
-                    delta = {"1W": pd.Timedelta(days=7), "1M": pd.DateOffset(months=1)}[
-                        period
-                    ]
-                    cutoff = end - delta
-                    base = ser[ser.index <= cutoff]
-                    base_val = base.iloc[-1] if len(base) else ser.iloc[0]
-                    ret = float(ser.iloc[-1] / base_val - 1.0)
+            ret = _price_period_return(ctx.adj_closes[ticker], period, end)
         tiles.append(
             {
                 "ticker": ticker,
@@ -926,14 +939,25 @@ def heatmap_payload(ctx: AccountContext, period: str = "1D") -> dict:
         sp = sector_perf.setdefault(t["sector"], {"weight": 0.0, "wret": 0.0})
         sp["weight"] += t["weight"]
         sp["wret"] += t["weight"] * t["return"]
-    sector_rows = [
-        {
-            "sector": k,
-            "weight": round(v["weight"], 6),
-            "return": round(v["wret"] / v["weight"], 6) if v["weight"] > 0 else None,
-        }
-        for k, v in sorted(sector_perf.items(), key=lambda kv: -kv[1]["weight"])
-    ]
+    sector_rows = []
+    for k, v in sorted(sector_perf.items(), key=lambda kv: -kv[1]["weight"]):
+        my_ret = round(v["wret"] / v["weight"], 6) if v["weight"] > 0 else None
+        etf_ticker = ctx.sector_etfs.get(k)
+        etf_ret = None
+        if end is not None and etf_ticker and etf_ticker in ctx.sector_etf_closes.columns:
+            etf_ret = _price_period_return(ctx.sector_etf_closes[etf_ticker], period, end)
+        sector_rows.append(
+            {
+                "sector": k,
+                "weight": round(v["weight"], 6),
+                "return": my_ret,
+                "etf_ticker": etf_ticker,
+                "etf_return": _round_or_none(etf_ret),
+                "excess_return": _round_or_none(my_ret - etf_ret)
+                if my_ret is not None and etf_ret is not None
+                else None,
+            }
+        )
     return {
         "account": ctx.key,
         "period": period,

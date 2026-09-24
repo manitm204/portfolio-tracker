@@ -193,7 +193,14 @@ export interface HeatmapResponse {
   period: string;
   periods: string[];
   tiles: { ticker: string; sector: string; weight: number; value: number; return: number | null }[];
-  sectors: { sector: string; weight: number; return: number | null }[];
+  sectors: {
+    sector: string;
+    weight: number;
+    return: number | null;
+    etf_ticker: string | null;
+    etf_return: number | null;
+    excess_return: number | null;
+  }[];
 }
 
 export interface Txn {

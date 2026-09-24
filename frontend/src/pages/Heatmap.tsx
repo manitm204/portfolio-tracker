@@ -125,6 +125,31 @@ export default function Heatmap() {
           layout={{ xaxis: { tickformat: "+.1%" }, hovermode: "closest", bargap: 0.3 }}
         />
       </div>
+
+      <SectionTitle hint="My sector return minus the sector ETF's return over the same period — positive means your picks beat just buying the sector.">
+        Sector excess vs. ETF
+      </SectionTitle>
+      <div className="card p-3">
+        <Chart
+          height={Math.max(220, data.sectors.length * 30)}
+          data={[
+            {
+              y: data.sectors.map((s) => s.sector).reverse(),
+              x: data.sectors.map((s) => s.excess_return ?? 0).reverse(),
+              type: "bar",
+              orientation: "h",
+              marker: {
+                color: data.sectors
+                  .map((s) => ((s.excess_return ?? 0) >= 0 ? "#0ca30c" : "#d03b3b"))
+                  .reverse(),
+              },
+              customdata: data.sectors.map((s) => s.etf_ticker ?? "—").reverse() as never,
+              hovertemplate: "%{y} vs %{customdata}: %{x:+.2%}<extra></extra>",
+            },
+          ]}
+          layout={{ xaxis: { tickformat: "+.1%" }, hovermode: "closest", bargap: 0.3 }}
+        />
+      </div>
     </div>
   );
 }

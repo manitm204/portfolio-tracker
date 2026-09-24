@@ -71,6 +71,25 @@ FACTOR_ETFS: dict[str, str] = {
     "SIZE": "Size (small-cap)",
 }
 
+# Select Sector SPDR ETFs, one per sector in the same vocabulary as
+# ModelTarget.sector / SECTOR_MAP above. Used on the Heatmap page as a
+# "how did my sector picks do vs. just buying the sector" yardstick — never
+# transacted or held, only their adjusted price series is used (see
+# AccountContext.sector_etf_closes).
+SECTOR_ETFS: dict[str, str] = {
+    "Information Technology": "XLK",
+    "Industrials": "XLI",
+    "Financials": "XLF",
+    "Health Care": "XLV",
+    "Consumer Discretionary": "XLY",
+    "Consumer Staples": "XLP",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Communication Services": "XLC",
+    "Energy": "XLE",
+    "Materials": "XLB",
+}
+
 # Every tracked symbol keeps at least this much trailing history, regardless
 # of account age, so trailing-window risk stats (security beta, factor
 # exposure, correlation matrix, PCA — see services._trailing_returns) never
@@ -89,8 +108,8 @@ def is_intraday_now() -> bool:
 
 
 def symbol_universe(db: Session) -> list[str]:
-    """Every symbol we must track: transacted tickers, active targets, benchmarks, factor ETFs."""
-    tickers: set[str] = set(FACTOR_ETFS)
+    """Every symbol we must track: transacted tickers, active targets, benchmarks, factor ETFs, sector ETFs."""
+    tickers: set[str] = set(FACTOR_ETFS) | set(SECTOR_ETFS.values())
     for (t,) in db.execute(
         select(Transaction.ticker).where(Transaction.ticker.isnot(None)).distinct()
     ):

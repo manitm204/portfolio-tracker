@@ -23,6 +23,8 @@ function ClosedPositionsTable({ rows }: { rows: ClosedPosition[] }) {
             <th className="p-2 text-right">Gain $</th>
             <th className="p-2 text-right">Gain %</th>
             <th className="p-2 text-right">CAGR</th>
+            <th className="p-2 text-right">CAGR vs SPY</th>
+            <th className="p-2 text-right">CAGR vs QQQ</th>
           </tr>
         </thead>
         <tbody>
@@ -37,6 +39,8 @@ function ClosedPositionsTable({ rows }: { rows: ClosedPosition[] }) {
               <td className={clsx("p-2 text-right tabular", signClass(r.gain_dollar))}>{fmtSignedMoney(r.gain_dollar)}</td>
               <td className={clsx("p-2 text-right tabular", signClass(r.gain_pct))}>{fmtSignedPct(r.gain_pct)}</td>
               <td className={clsx("p-2 text-right tabular", signClass(r.cagr))}>{r.cagr !== null ? fmtSignedPct(r.cagr) : "—"}</td>
+              <td className={clsx("p-2 text-right tabular", signClass(r.cagr_excess_spy))}>{r.cagr_excess_spy !== null ? fmtSignedPct(r.cagr_excess_spy) : "—"}</td>
+              <td className={clsx("p-2 text-right tabular", signClass(r.cagr_excess_qqq))}>{r.cagr_excess_qqq !== null ? fmtSignedPct(r.cagr_excess_qqq) : "—"}</td>
             </tr>
           ))}
         </tbody>

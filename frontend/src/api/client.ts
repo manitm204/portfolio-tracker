@@ -296,6 +296,10 @@ export interface ClosedPosition {
   gain_dollar: number;
   gain_pct: number | null;
   cagr: number | null;
+  spy_cagr: number | null;
+  qqq_cagr: number | null;
+  cagr_excess_spy: number | null;
+  cagr_excess_qqq: number | null;
 }
 
 export interface HistoryResponse {

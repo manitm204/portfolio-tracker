@@ -877,14 +877,15 @@ def risk_payload(ctx: AccountContext) -> dict:
     }
 
 
-HEATMAP_PERIODS = ("1D", "1W", "1M", "SI")
+HEATMAP_PERIODS = ("1D", "1W", "1M", "MTD", "SI")
 
 
 def _price_period_return(ser: pd.Series, period: str, end: pd.Timestamp) -> float | None:
     """Simple price return over ``period`` ending at ``end``, from a series
     already forward-filled onto the account's trading calendar. ``period ==
     "SI"`` uses the series' first calendar observation (account inception) as
-    the base."""
+    the base; ``"MTD"`` uses the last close before the start of ``end``'s
+    calendar month."""
     ser = ser.dropna()
     if len(ser) < 2:
         return None
@@ -892,9 +893,12 @@ def _price_period_return(ser: pd.Series, period: str, end: pd.Timestamp) -> floa
         return float(ser.iloc[-1] / ser.iloc[-2] - 1.0)
     if period == "SI":
         return float(ser.iloc[-1] / ser.iloc[0] - 1.0)
-    delta = {"1W": pd.Timedelta(days=7), "1M": pd.DateOffset(months=1)}[period]
-    cutoff = end - delta
-    base = ser[ser.index <= cutoff]
+    if period == "MTD":
+        cutoff = end.replace(day=1)
+    else:
+        delta = {"1W": pd.Timedelta(days=7), "1M": pd.DateOffset(months=1)}[period]
+        cutoff = end - delta
+    base = ser[ser.index < cutoff] if period == "MTD" else ser[ser.index <= cutoff]
     base_val = base.iloc[-1] if len(base) else ser.iloc[0]
     return float(ser.iloc[-1] / base_val - 1.0)
 

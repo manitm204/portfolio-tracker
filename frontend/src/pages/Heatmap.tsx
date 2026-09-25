@@ -49,6 +49,7 @@ const PERIOD_LABEL: Record<string, string> = {
   "1D": "Daily",
   "1W": "Weekly",
   "1M": "Monthly",
+  MTD: "Month to date",
   SI: "Since inception",
 };
 

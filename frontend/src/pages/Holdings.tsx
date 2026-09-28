@@ -93,7 +93,7 @@ export default function Holdings() {
           </thead>
           <tbody>
             {rows.map((h) => (
-              <tr key={h.ticker} className="border-t border-[var(--border)]">
+              <tr key={h.ticker} className="border-t border-[var(--border)] odd:bg-[var(--page)]">
                 <td className="p-2 font-semibold">
                   {h.ticker}
                   {h.price_stale && <span className="ml-1 text-[10px] text-[#c98500]" title={`Price forward-filled; last trade ${h.price_as_of ?? "unknown"}`}>stale</span>}

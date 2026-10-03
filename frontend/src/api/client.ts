@@ -305,8 +305,12 @@ export interface ClosedPosition {
   cagr: number | null;
   spy_cagr: number | null;
   qqq_cagr: number | null;
+  sector: string | null;
+  sector_etf: string | null;
+  sector_etf_cagr: number | null;
   cagr_excess_spy: number | null;
   cagr_excess_qqq: number | null;
+  cagr_excess_sector: number | null;
 }
 
 export interface HistoryResponse {

@@ -25,6 +25,7 @@ function ClosedPositionsTable({ rows }: { rows: ClosedPosition[] }) {
             <th className="p-2 text-right">CAGR</th>
             <th className="p-2 text-right">CAGR vs SPY</th>
             <th className="p-2 text-right">CAGR vs QQQ</th>
+            <th className="p-2 text-right" title="Excess CAGR vs the Select Sector SPDR ETF for the position's sector (e.g. XLK, XLF) over the same holding window.">CAGR vs sector ETF</th>
           </tr>
         </thead>
         <tbody>
@@ -41,6 +42,19 @@ function ClosedPositionsTable({ rows }: { rows: ClosedPosition[] }) {
               <td className={clsx("p-2 text-right tabular", signClass(r.cagr))}>{r.cagr !== null ? fmtSignedPct(r.cagr) : "—"}</td>
               <td className={clsx("p-2 text-right tabular", signClass(r.cagr_excess_spy))}>{r.cagr_excess_spy !== null ? fmtSignedPct(r.cagr_excess_spy) : "—"}</td>
               <td className={clsx("p-2 text-right tabular", signClass(r.cagr_excess_qqq))}>{r.cagr_excess_qqq !== null ? fmtSignedPct(r.cagr_excess_qqq) : "—"}</td>
+              <td
+                className={clsx("p-2 text-right tabular", signClass(r.cagr_excess_sector))}
+                title={r.sector_etf ? `vs ${r.sector_etf}${r.sector ? ` (${r.sector})` : ""}` : undefined}
+              >
+                {r.cagr_excess_sector !== null ? (
+                  <>
+                    {fmtSignedPct(r.cagr_excess_sector)}
+                    {r.sector_etf && <span className="ml-1 text-[10px] text-[var(--text-muted)]">{r.sector_etf}</span>}
+                  </>
+                ) : (
+                  "—"
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

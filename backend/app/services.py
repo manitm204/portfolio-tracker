@@ -1117,10 +1117,14 @@ def account_contributions(db: Session) -> list[dict]:
     return out
 
 
-def _bench_closes(db: Session, start: dt.date, end: dt.date) -> dict[str, pd.Series]:
-    """Adjusted-close series for SPY/QQQ, used as a same-period CAGR yardstick
-    for closed positions (see ``_realized_trades``)."""
-    frame = load_price_frame(db, ["SPY", "QQQ"], start, end)
+def _bench_closes(
+    db: Session, start: dt.date, end: dt.date, extra: list[str] | None = None
+) -> dict[str, pd.Series]:
+    """Adjusted-close series for SPY/QQQ (plus any ``extra`` tickers, e.g. the
+    sector SPDR ETFs), used as a same-period CAGR yardstick for closed
+    positions (see ``_realized_trades``)."""
+    tickers = ["SPY", "QQQ", *(extra or [])]
+    frame = load_price_frame(db, tickers, start, end)
     adj = close_matrix(frame, "adj_close")
     return {t: adj[t].dropna() for t in adj.columns}
 
@@ -1139,7 +1143,9 @@ def _bench_cagr(series: pd.Series | None, open_date: dt.date, close_date: dt.dat
 
 
 def _realized_trades(
-    ledger: list[Transaction], bench_closes: dict[str, pd.Series] | None = None
+    ledger: list[Transaction],
+    bench_closes: dict[str, pd.Series] | None = None,
+    sectors: dict[str, str] | None = None,
 ) -> list[dict]:
     """Closed positions (fully sold out): realized gain %, holding period, CAGR.
 
@@ -1148,11 +1154,14 @@ def _realized_trades(
     ~zero shares after being open, that closes a "trade episode" — buying the
     same ticker again later starts a new, separate episode.
 
-    ``bench_closes`` (SPY/QQQ adjusted-close series) lets each episode report
-    the CAGR excess vs. holding the benchmark over that same open/close
-    window instead — an apples-to-apples "did this beat the market" number.
+    ``bench_closes`` (SPY/QQQ plus sector-SPDR adjusted-close series) lets each
+    episode report the CAGR excess vs. holding the benchmark over that same
+    open/close window instead — an apples-to-apples "did this beat the market"
+    number. ``sectors`` (ticker → GICS sector) selects which sector SPDR ETF
+    each episode is compared against via ``SECTOR_ETFS``.
     """
     bench_closes = bench_closes or {}
+    sectors = sectors or {}
     episodes: list[dict] = []
     state: dict[str, dict] = {}
     for txn in ledger:
@@ -1200,6 +1209,13 @@ def _realized_trades(
                     )
                     spy_cagr = _bench_cagr(bench_closes.get("SPY"), open_date, close_date)
                     qqq_cagr = _bench_cagr(bench_closes.get("QQQ"), open_date, close_date)
+                    sector = sectors.get(txn.ticker)
+                    sector_etf = SECTOR_ETFS.get(sector) if sector else None
+                    sector_cagr = (
+                        _bench_cagr(bench_closes.get(sector_etf), open_date, close_date)
+                        if sector_etf
+                        else None
+                    )
                     episodes.append(
                         {
                             "ticker": txn.ticker,
@@ -1213,11 +1229,17 @@ def _realized_trades(
                             "cagr": _round_or_none(cagr),
                             "spy_cagr": _round_or_none(spy_cagr),
                             "qqq_cagr": _round_or_none(qqq_cagr),
+                            "sector": sector,
+                            "sector_etf": sector_etf,
+                            "sector_etf_cagr": _round_or_none(sector_cagr),
                             "cagr_excess_spy": _round_or_none(cagr - spy_cagr)
                             if cagr is not None and spy_cagr is not None
                             else None,
                             "cagr_excess_qqq": _round_or_none(cagr - qqq_cagr)
                             if cagr is not None and qqq_cagr is not None
+                            else None,
+                            "cagr_excess_sector": _round_or_none(cagr - sector_cagr)
+                            if cagr is not None and sector_cagr is not None
                             else None,
                         }
                     )
@@ -1235,14 +1257,26 @@ def history_payload(db: Session, account_key: str) -> dict:
 
     account_ids = resolve_account_ids(db, account_key)
     ledger = load_ledger(db, account_ids)
+    sectors = {
+        t: s
+        for t, s in db.execute(
+            select(ModelTarget.ticker, ModelTarget.sector).where(
+                ModelTarget.account_id.in_(account_ids)
+            )
+        ).all()
+    }
     trade_dates = [t.trade_date for t in ledger if t.trade_date]
     bench_closes = (
-        _bench_closes(db, min(trade_dates), dt.date.today()) if trade_dates else {}
+        _bench_closes(
+            db, min(trade_dates), dt.date.today(), list(SECTOR_ETFS.values())
+        )
+        if trade_dates
+        else {}
     )
     return {
         "account": account_key,
         "events": history_events(db, account_ids),
-        "closed_positions": _realized_trades(ledger, bench_closes),
+        "closed_positions": _realized_trades(ledger, bench_closes, sectors),
     }
 
 

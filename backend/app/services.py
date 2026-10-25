@@ -30,7 +30,7 @@ from .analytics.data import (
 from .analytics import diversification as div
 from .analytics.positions import daily_positions, external_flow_list, load_ledger
 from .config import get_settings
-from .fmp_client import FMPClient
+from .market_data import get_market_data_client
 from .ingestion import FACTOR_ETFS, SECTOR_ETFS, TRAILING_LOOKBACK_CALENDAR_DAYS
 from .models import (
     Account,
@@ -1015,7 +1015,7 @@ def monte_carlo_payload(
 
     method = "equal_weight"
     n = len(targets)
-    with FMPClient() as client:
+    with get_market_data_client() as client:
         universe = sorted(set(ensure_sp500_constituents(db, client)) - {"SPY", "QQQ"})
         picks = mc.sample_universe(universe, n, sims, rng)
         needed = sorted({t for pick in picks for t in pick})
@@ -1280,6 +1280,15 @@ def history_payload(db: Session, account_key: str) -> dict:
     }
 
 
+def _active_provider_or_none() -> str | None:
+    from .market_data import MarketDataError, active_provider
+
+    try:
+        return active_provider()
+    except MarketDataError:
+        return None
+
+
 def data_quality_payload(db: Session) -> dict:
     from .ingestion import symbol_universe
 
@@ -1396,6 +1405,7 @@ def data_quality_payload(db: Session) -> dict:
     ]
     return {
         "symbols": len(symbols),
+        "provider": _active_provider_or_none(),
         "issues": issues,
         "stale_symbols": stale,
         "refresh_runs": [
@@ -1408,6 +1418,7 @@ def data_quality_payload(db: Session) -> dict:
                 "symbols_ok": r.symbols_ok,
                 "symbols_failed": r.symbols_failed,
                 "detail": r.detail,
+                "provider": r.provider,
             }
             for r in runs
         ],

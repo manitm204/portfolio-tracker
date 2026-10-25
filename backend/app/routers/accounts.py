@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .. import csv_io, services
 from ..database import get_db
-from ..fmp_client import FMPError
+from ..market_data import MarketDataError
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 _monte_carlo_lock = threading.Lock()
@@ -84,7 +84,7 @@ def monte_carlo(
         return services.monte_carlo_payload(_ctx(db, account_id), sims, seed)
     except services.UnsupportedMonteCarlo as err:
         raise HTTPException(400, str(err))
-    except FMPError as err:
+    except MarketDataError as err:
         raise HTTPException(502, f"Market data provider error: {err}")
     finally:
         _monte_carlo_lock.release()

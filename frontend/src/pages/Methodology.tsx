@@ -3,14 +3,14 @@ const SECTIONS: { title: string; body: string[] }[] = [
     title: "Accounts & bootstrap",
     body: [
       "PORTFOLIO_5 ($500, exactly $100 into each of GOOGL, IBKR, CIEN, SPGI, ADSK at the July 29 2026 open, full-precision fractional shares).",
-      "The official opening prices were fetched from FMP exactly once at bootstrap, stored as immutable fills, and are never recomputed from newer data.",
+      "The official opening prices were fetched from the market-data provider exactly once at bootstrap, stored as immutable fills, and are never recomputed from newer data.",
     ],
   },
   {
     title: "Ledger & positions",
     body: [
       "All activity lives in an append-only transaction ledger (BUY, SELL, DIVIDEND, DEPOSIT, WITHDRAWAL, FEE, SPLIT, SYMBOL_CHANGE). Daily positions and cash are reconstructed from the ledger on the trading calendar; nothing is ever edited in place.",
-      "Dividends detected from FMP are credited as cash on the ex-date (shares held before the ex-date × dividend per share) until the payment date is known to have passed; splits multiply shares with zero economic return; symbol changes move the whole position.",
+      "Dividends detected from the market-data provider are credited as cash on the ex-date (shares held before the ex-date × dividend per share) until the payment date is known to have passed; splits multiply shares with zero economic return; symbol changes move the whole position.",
       "Cost basis uses the average-cost method.",
     ],
   },
@@ -50,7 +50,7 @@ const SECTIONS: { title: string; body: string[] }[] = [
   {
     title: "Data caveats",
     body: [
-      "FMP is the sole market-data source; the API key lives only on the backend. Missing data is surfaced, never zero-filled. Adjusted history is re-fetched over the account window on every refresh because adjustments are retroactive.",
+      "Market data comes from one provider at a time, chosen by MARKET_DATA_PROVIDER: FMP when an FMP_API_KEY is configured, otherwise keyless Yahoo Finance (with the S&P 500 list from Wikipedia). There is no silent fallback between them, and the active source is shown on Data Quality; any API key lives only on the backend. Missing data is surfaced, never zero-filled. Adjusted history is re-fetched over the account window on every refresh because adjustments are retroactive.",
       "With only days of history since inception, most risk statistics are legitimately 'insufficient history' — they will populate as observations accrue.",
     ],
   },

@@ -13,7 +13,7 @@ import sys
 
 from .bootstrap import hydrate_all
 from .database import session_scope
-from .fmp_client import FMPClient
+from .market_data import get_market_data_client
 from .ingestion import execute_equal_weight_rebalance, refresh_market_data
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -61,7 +61,7 @@ def cmd_rebalance_5() -> int:
         ("NUE", "Materials"),
         ("ABBV", "Health Care"),
     ]
-    with session_scope() as db, FMPClient() as client:
+    with session_scope() as db, get_market_data_client() as client:
         event = execute_equal_weight_rebalance(
             db,
             client,

@@ -133,7 +133,7 @@ in-app **Methodology** page and in [PROJECT_SPEC.md](PROJECT_SPEC.md).
 ## Stack
 
 FastAPI + SQLAlchemy + pandas backend · React + TypeScript + Vite + Tailwind + Plotly frontend ·
-Financial Modeling Prep (FMP) market data · SQLite storage · APScheduler for end-of-day refresh ·
+Financial Modeling Prep (FMP) or keyless Yahoo Finance market data · SQLite storage · APScheduler for end-of-day refresh ·
 Docker Compose for deployment.
 
 For setup and local development instructions, see [SETUP.md](SETUP.md).

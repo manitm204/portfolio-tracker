@@ -1,6 +1,6 @@
 """Application settings loaded from environment / .env (backend-only).
 
-The FMP API key is read here and must never be returned by any API endpoint,
+API keys are read here and must never be returned by any API endpoint,
 logged, or embedded in frontend bundles.
 """
 
@@ -22,6 +22,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # auto = FMP when FMP_API_KEY is set, else keyless Yahoo (see market_data.py)
+    market_data_provider: str = "auto"  # auto | fmp | yahoo
     fmp_api_key: str = ""
     database_url: str = f"sqlite:///{PROJECT_ROOT / 'data' / 'portfolio_tracker.db'}"
     app_timezone: str = "America/New_York"
@@ -37,6 +39,8 @@ class Settings(BaseSettings):
     fmp_base_url: str = "https://financialmodelingprep.com/stable"
     fmp_max_retries: int = 4
     fmp_timeout_seconds: float = 20.0
+    yahoo_max_retries: int = 3
+    yahoo_timeout_seconds: float = 30.0
 
     @property
     def database_url_resolved(self) -> str:

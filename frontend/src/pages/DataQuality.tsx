@@ -4,6 +4,12 @@ import { api } from "../api/client";
 import { EmptyState, ErrorState, SectionTitle, Skeleton } from "../components/Primitives";
 import { fmtDateTime } from "../lib/format";
 
+const PROVIDER_LABELS: Record<string, string> = { fmp: "FMP", yahoo: "Yahoo" };
+
+function providerLabel(p: string | null): string {
+  return p ? PROVIDER_LABELS[p] ?? p : "—";
+}
+
 export default function DataQuality() {
   const q = useQuery({ queryKey: ["data-quality"], queryFn: api.dataQuality });
 
@@ -13,7 +19,10 @@ export default function DataQuality() {
 
   return (
     <div className="space-y-4">
-      <div className="text-sm text-[var(--text-secondary)]">{d.symbols} symbols tracked (holdings + benchmarks).</div>
+      <div className="text-sm text-[var(--text-secondary)]">
+        {d.symbols} symbols tracked (holdings + benchmarks) · market data from{" "}
+        <span className="font-medium text-[var(--text-primary)]">{providerLabel(d.provider)}</span>.
+      </div>
 
       <SectionTitle>Issues</SectionTitle>
       {d.issues.length === 0 ? (
@@ -72,7 +81,7 @@ export default function DataQuality() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-[var(--text-muted)]">
-                <th className="p-2">#</th><th className="p-2">Trigger</th><th className="p-2">Status</th>
+                <th className="p-2">#</th><th className="p-2">Trigger</th><th className="p-2">Source</th><th className="p-2">Status</th>
                 <th className="p-2">Started</th><th className="p-2">Finished</th>
                 <th className="p-2 text-right">OK</th><th className="p-2 text-right">Failed</th><th className="p-2">Detail</th>
               </tr>
@@ -82,6 +91,7 @@ export default function DataQuality() {
                 <tr key={r.id} className="border-t border-[var(--border)]">
                   <td className="p-2 tabular">{r.id}</td>
                   <td className="p-2">{r.trigger}</td>
+                  <td className="p-2">{providerLabel(r.provider)}</td>
                   <td className={clsx("p-2 font-medium", r.status === "success" ? "text-[var(--pos-text)]" : r.status === "partial" ? "text-[#c98500]" : "text-[var(--neg)]")}>{r.status}</td>
                   <td className="p-2 tabular text-xs">{fmtDateTime(r.started_at)}</td>
                   <td className="p-2 tabular text-xs">{fmtDateTime(r.finished_at)}</td>

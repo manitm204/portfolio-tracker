@@ -2,7 +2,8 @@
 
 Loads the seed book (accounts + model targets) from ``data/*.csv`` and, once
 per account, fetches the official opening price for each purchase date from
-FMP, materializes canonical BUY transactions and immutable OfficialFill rows.
+the market-data provider, materializes canonical BUY transactions and
+immutable OfficialFill rows.
 
 Idempotency: hydration is guarded by ``bootstrap_state`` and every generated
 transaction carries a unique ``source_key`` so re-running can never duplicate
@@ -21,7 +22,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import PROJECT_ROOT
-from .fmp_client import FMPClient, FMPError
+from .market_data import (
+    MarketDataClient,
+    MarketDataError,
+    get_market_data_client,
+    provider_name,
+)
 from .models import (
     Account,
     BootstrapState,
@@ -104,7 +110,7 @@ class HydrationResult:
 
 
 def hydrate_account(
-    db: Session, account_id: str, client: FMPClient | None = None
+    db: Session, account_id: str, client: MarketDataClient | None = None
 ) -> HydrationResult:
     """Fetch official opens and materialize canonical transactions for one account."""
     state = db.get(BootstrapState, account_id)
@@ -130,7 +136,7 @@ def hydrate_account(
         )
 
     own_client = client is None
-    client = client or FMPClient()
+    client = client or get_market_data_client()
     result = HydrationResult(account_id=account_id, hydrated=False)
     try:
         fill_date = account.start_date
@@ -148,7 +154,7 @@ def hydrate_account(
                     continue
                 opens[t.ticker] = float(bar["open"])
                 _upsert_price_bar(db, t.ticker, fill_date, bar)
-            except FMPError as err:
+            except MarketDataError as err:
                 result.errors.append(f"{t.ticker}: {err}")
 
         if result.errors:
@@ -196,7 +202,7 @@ def hydrate_account(
                     price=open_price,
                     fees=0.0,
                     cash_flow=-cost,
-                    source="FMP_OFFICIAL_OPEN",
+                    source=f"{provider_name(client).upper()}_OFFICIAL_OPEN",
                     source_key=f"bootstrap:{account_id}:{t.ticker}",
                     notes="Hydrated once from official opening price",
                 )
@@ -257,11 +263,11 @@ def _upsert_price_bar(db: Session, ticker: str, date: dt.date, bar: dict) -> Non
         )
 
 
-def hydrate_all(db: Session, client: FMPClient | None = None) -> list[HydrationResult]:
+def hydrate_all(db: Session, client: MarketDataClient | None = None) -> list[HydrationResult]:
     load_seed_book(db)
     account_ids = db.execute(select(Account.id)).scalars().all()
     own = client is None
-    client = client or FMPClient()
+    client = client or get_market_data_client()
     try:
         return [hydrate_account(db, aid, client) for aid in account_ids]
     finally:

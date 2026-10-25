@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import services
 from ..database import get_db, session_scope
-from ..fmp_client import FMPError
+from ..market_data import MarketDataError
 from ..ingestion import refresh_market_data
 
 router = APIRouter(prefix="/api", tags=["admin"])
@@ -32,7 +32,7 @@ def refresh(db: Session = Depends(get_db)):
             "dividends_created": report.dividends_created,
             "splits_created": report.splits_created,
         }
-    except FMPError as err:
+    except MarketDataError as err:
         raise HTTPException(502, f"Market data provider error: {err}")
     finally:
         _refresh_lock.release()

@@ -22,7 +22,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from .fmp_client import FMPClient, FMPError
+from .market_data import (
+    MarketDataClient,
+    MarketDataError,
+    get_market_data_client,
+    prefetch,
+    provider_name,
+)
 from .models import (
     Account,
     IndexConstituent,
@@ -37,10 +43,24 @@ from .models import (
 )
 
 # FMP's sp500-constituent "sector" field uses its own (Morningstar-style)
-# taxonomy, not GICS. Normalize it to the vocabulary already used by
-# ModelTarget.sector (the seed book) so sector-matched Monte Carlo sampling
-# can compare like with like.
+# taxonomy, not GICS; the Yahoo provider's Wikipedia list is already GICS.
+# Normalize both to the vocabulary already used by ModelTarget.sector (the
+# seed book) so sector-matched Monte Carlo sampling can compare like with like.
+GICS_SECTORS = (
+    "Information Technology",
+    "Industrials",
+    "Financials",
+    "Health Care",
+    "Consumer Discretionary",
+    "Consumer Staples",
+    "Utilities",
+    "Real Estate",
+    "Communication Services",
+    "Energy",
+    "Materials",
+)
 SECTOR_MAP = {
+    **{s: s for s in GICS_SECTORS},
     "Technology": "Information Technology",
     "Industrials": "Industrials",
     "Financial Services": "Financials",
@@ -145,20 +165,24 @@ class RefreshReport:
 
 
 def refresh_market_data(
-    db: Session, trigger: str = "manual", client: FMPClient | None = None
+    db: Session, trigger: str = "manual", client: MarketDataClient | None = None
 ) -> RefreshReport:
     run = RefreshRun(trigger=trigger, status="running")
     db.add(run)
     db.commit()
 
     own_client = client is None
-    client = client or FMPClient()
+    client = client or get_market_data_client()
     start_date = earliest_needed_date(db)
     today = ny_today()
     symbols = symbol_universe(db)
     report = RefreshReport(run_id=run.id, symbols_total=len(symbols))
+    run.provider = provider_name(client)
+    db.commit()
+    log.info("Refreshing %d symbols via %s", len(symbols), run.provider)
 
     try:
+        prefetch(client, symbols, start_date, today)
         for symbol in symbols:
             state = db.merge(
                 db.get(SymbolSyncState, symbol) or SymbolSyncState(ticker=symbol)
@@ -171,7 +195,7 @@ def refresh_market_data(
                 state.error = None
                 state.last_success_at = utcnow()
                 report.symbols_ok += 1
-            except FMPError as err:
+            except MarketDataError as err:
                 state.status = "error"
                 state.error = str(err)
                 report.symbols_failed += 1
@@ -186,7 +210,7 @@ def refresh_market_data(
                 s, d = _sync_corporate_actions(db, client, symbol, start_date)
                 report.splits_created += s
                 report.dividends_created += d
-            except FMPError as err:
+            except MarketDataError as err:
                 report.failures.append(f"{symbol} corporate actions: {err}")
             db.commit()
 
@@ -231,7 +255,7 @@ def _transacted_tickers(db: Session) -> list[str]:
 
 def _sync_symbol_prices(
     db: Session,
-    client: FMPClient,
+    client: MarketDataClient,
     symbol: str,
     state: SymbolSyncState,
     window_start: dt.date,
@@ -325,7 +349,7 @@ def _upsert_bar_adjusted(db: Session, symbol: str, date: dt.date, bar: dict) -> 
 # transacted (random SPY picks), and a cached S&P 500 membership list.
 # ---------------------------------------------------------------------------
 def ensure_adjusted_history(
-    db: Session, client: FMPClient, symbols: list[str], start: dt.date, end: dt.date
+    db: Session, client: MarketDataClient, symbols: list[str], start: dt.date, end: dt.date
 ) -> list[str]:
     """Backfill adjusted price history for symbols not already covered.
 
@@ -334,34 +358,38 @@ def ensure_adjusted_history(
     that failed to fetch (caller decides whether that's fatal).
     """
     failed: list[str] = []
-    for symbol in symbols:
-        # Must check the EARLIEST cached bar, not just "any bar near start":
-        # a ticker fetched for a different (later) account inception window
-        # can have real data starting after ``start``, which would otherwise
-        # look "covered" and silently leave an early-date gap.
-        earliest = db.execute(
-            select(func.min(PriceBar.date)).where(
-                PriceBar.ticker == symbol, PriceBar.adj_close.isnot(None)
-            )
-        ).scalar()
-        if earliest is not None and earliest <= start + dt.timedelta(days=1):
-            continue
+    missing = [s for s in symbols if not _adjusted_covers(db, s, start)]
+    prefetch(client, missing, start, end)
+    for symbol in missing:
         try:
             adj = client.historical_eod_adjusted(symbol, start, end)
             for bar in adj:
                 bar_date = dt.date.fromisoformat(bar["date"])
                 _upsert_bar_adjusted(db, symbol, bar_date, bar)
             db.commit()
-        except FMPError:
+        except MarketDataError:
             db.rollback()
             failed.append(symbol)
     return failed
 
 
+def _adjusted_covers(db: Session, symbol: str, start: dt.date) -> bool:
+    # Must check the EARLIEST cached bar, not just "any bar near start":
+    # a ticker fetched for a different (later) account inception window
+    # can have real data starting after ``start``, which would otherwise
+    # look "covered" and silently leave an early-date gap.
+    earliest = db.execute(
+        select(func.min(PriceBar.date)).where(
+            PriceBar.ticker == symbol, PriceBar.adj_close.isnot(None)
+        )
+    ).scalar()
+    return earliest is not None and earliest <= start + dt.timedelta(days=1)
+
+
 def ensure_sp500_constituents(
-    db: Session, client: FMPClient, max_age_days: int = 30
+    db: Session, client: MarketDataClient, max_age_days: int = 30
 ) -> list[str]:
-    """Cached S&P 500 membership, refreshed from FMP when stale or empty."""
+    """Cached S&P 500 membership, refreshed from the provider when stale or empty."""
     latest = db.execute(
         select(func.max(IndexConstituent.fetched_at)).where(
             IndexConstituent.index_name == "sp500"
@@ -442,12 +470,13 @@ def _shares_held_before(
 
 
 def _sync_corporate_actions(
-    db: Session, client: FMPClient, symbol: str, window_start: dt.date
+    db: Session, client: MarketDataClient, symbol: str, window_start: dt.date
 ) -> tuple[int, int]:
     """Materialize SPLIT then DIVIDEND ledger rows for every account holding
     the symbol. Returns (splits_created, dividends_created)."""
     account_ids = [a for (a,) in db.execute(select(Account.id))]
     splits_created = dividends_created = 0
+    source = f"{provider_name(client).upper()}_CORPORATE_ACTIONS"
 
     today = ny_today()
     for split in client.splits(symbol):
@@ -475,7 +504,7 @@ def _sync_corporate_actions(
                     ticker=symbol,
                     type=TransactionType.SPLIT,
                     split_ratio=ratio,
-                    source="FMP_CORPORATE_ACTIONS",
+                    source=source,
                     source_key=key,
                     notes=f"{num:g}-for-{den:g} split",
                 )
@@ -511,7 +540,7 @@ def _sync_corporate_actions(
                     shares=held,
                     price=amount,
                     cash_flow=held * amount,
-                    source="FMP_CORPORATE_ACTIONS",
+                    source=source,
                     source_key=key,
                     notes=f"${amount:g}/share, ex {ex_date.isoformat()}",
                 )
@@ -599,7 +628,7 @@ def _sector_alloc(values: dict[str, float], sectors: dict[str, str]) -> list[dic
 
 def execute_equal_weight_rebalance(
     db: Session,
-    client: FMPClient,
+    client: MarketDataClient,
     account_id: str,
     new_composition: list[tuple[str, str]],
     event_date: dt.date | None = None,
@@ -647,7 +676,7 @@ def execute_equal_weight_rebalance(
             row = _get_bar(db, ticker, event_date)
             if row is None:
                 _upsert_bar_raw(db, ticker, event_date, bar, provisional=False)
-        except FMPError as err:
+        except MarketDataError as err:
             errors.append(f"{ticker}: {err}")
     if errors:
         db.rollback()

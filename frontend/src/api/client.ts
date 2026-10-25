@@ -221,6 +221,7 @@ export interface Txn {
 
 export interface DataQuality {
   symbols: number;
+  provider: string | null;
   issues: { type: string; ticker: string | null; detail: string }[];
   stale_symbols: { ticker: string; last_success_date: string | null; status: string; error: string | null }[];
   refresh_runs: {
@@ -232,6 +233,7 @@ export interface DataQuality {
     symbols_ok: number;
     symbols_failed: number;
     detail: string | null;
+    provider: string | null;
   }[];
 }
 

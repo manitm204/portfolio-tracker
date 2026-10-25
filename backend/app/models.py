@@ -216,6 +216,9 @@ class RefreshRun(Base):
     symbols_ok: Mapped[int] = mapped_column(Integer, default=0)
     symbols_failed: Mapped[int] = mapped_column(Integer, default=0)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )  # fmp | yahoo — which market-data source this run used
 
 
 class IndexConstituent(Base):

@@ -21,7 +21,7 @@ Prereqs: Python 3.11+, Node 20+.
 
 ```bash
 # 1. Configure the environment (never commit .env)
-cp .env.example .env          # then put your real FMP key in FMP_API_KEY
+cp .env.example .env          # optional: set FMP_API_KEY (blank = keyless Yahoo)
 
 # 2. Backend
 cd backend
@@ -29,7 +29,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/alembic upgrade head              # create/migrate the SQLite schema
 
-# 3. One-time seed hydration (fetches official opens from FMP exactly once)
+# 3. One-time seed hydration (fetches official opens exactly once)
 .venv/bin/python -m app.cli bootstrap
 
 # 4. First market-data refresh (prices + dividends/splits since inception)
@@ -50,8 +50,7 @@ npm run dev                                  # http://localhost:5173
 
 ### Hydrating real data — the single command
 
-If the code was developed against fixtures or the key was unavailable, the one command that
-hydrates real data once `FMP_API_KEY` is set:
+The one command that hydrates real data (works without any key via Yahoo):
 
 ```bash
 cd backend && .venv/bin/python -m app.cli bootstrap && .venv/bin/python -m app.cli refresh
@@ -93,7 +92,7 @@ Prereqs: the Docker Compose plugin (`docker compose version` should work) and a 
 `BACKEND_PORT=8010 FRONTEND_PORT=3010 docker compose up`.
 
 ```bash
-cp .env.example .env      # set FMP_API_KEY
+cp .env.example .env      # optional: set FMP_API_KEY
 docker compose up --build # frontend at http://localhost:3000, API at :8000
 # hydrate inside the container (first run only):
 docker compose exec backend python -m app.cli bootstrap
@@ -129,8 +128,28 @@ at PostgreSQL later without code changes.
   until the payment date passes; declared-but-future ex-dates are never materialized early.
 - **Splits**: multiply shares with zero economic return, applied from the effective date.
 
+## Market-data provider
+
+`MARKET_DATA_PROVIDER` in `.env` picks the source (`backend/app/market_data.py`):
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | FMP when `FMP_API_KEY` is set, otherwise Yahoo Finance |
+| `fmp` | Financial Modeling Prep; requires `FMP_API_KEY` |
+| `yahoo` | Yahoo Finance via `yfinance` (no key) + S&P 500 list from Wikipedia |
+
+The provider is picked once per process, with no automatic fallback, so stored data never
+silently mixes sources. Each refresh run records which provider it used (shown on the Data
+Quality page). Switching is safe: every refresh re-fetches the full adjusted-close window, so the
+analytics series rewrites itself from the new provider; dividend/split ledger keys don't include
+the provider, so nothing gets duplicated; and the bootstrap/rebalance fills never change once
+written. Restart the backend after changing `.env`.
+
+Yahoo is an unofficial source: it has no dividend payment dates (dividends are credited on the
+ex-date) and can occasionally rate-limit. If a refresh shows failures, just re-run it.
+
 ## Security
 
-- `FMP_API_KEY` is read only by the backend process (`backend/app/config.py`), never enters
+- `FMP_API_KEY` (when used) is read only by the backend process (`backend/app/config.py`), never enters
   the frontend bundle or API responses, and httpx request-URL logging is capped to keep the
   key out of logs. `.env` is git-ignored; only `.env.example` is committed.

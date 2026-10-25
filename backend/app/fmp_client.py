@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from .config import get_settings
+from .market_data import MarketDataError
 
 log = logging.getLogger(__name__)
 
@@ -26,11 +27,13 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
-class FMPError(Exception):
+class FMPError(MarketDataError):
     pass
 
 
 class FMPClient:
+    name = "fmp"
+
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
         s = get_settings()
         self._api_key = api_key if api_key is not None else s.fmp_api_key

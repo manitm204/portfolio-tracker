@@ -1,9 +1,10 @@
 # Portfolio Tracker — Product and Engineering Specification
 
-> **Note:** This spec originally covered two accounts, `PORTFOLIO_125` and `PORTFOLIO_5`, plus a
-> `combined` pseudo-account view. The 125-stock portfolio and the combined view were retired; the
-> product now tracks a single account, `PORTFOLIO_5`. Sections below that still describe the
-> retired account or combined view are kept as historical record of the original design.
+> **Note:** This spec describes the original design. The product now runs as four equally funded
+> sleeves (`SLEEVE_1`–`SLEEVE_4`) rolled up into one portfolio (the `combined` key), replacing the
+> single `PORTFOLIO_5` account, which stays archived in the database. See [README.md](README.md)
+> and the in-app Methodology page for current behavior; where they differ from this document,
+> they win.
 
 ## Product goal
 

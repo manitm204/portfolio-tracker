@@ -1,9 +1,24 @@
 # Setup & Development
 
-## Account
+## Sleeves
 
-- **`PORTFOLIO_5`** — $500; exactly $100 into each of GOOGL, IBKR, CIEN, SPGI, ADSK at the
-  **July 29, 2026** open. Fractional shares = `100 / official_open` at full float precision.
+The portfolio is four equally funded sleeves of 4–6 stocks, each bought in equal dollars at the
+official open of its purchase date. They live in `data/accounts.csv` and
+`data/sleeve_holdings.csv`:
+
+| Sleeve | Purchased | Holdings |
+| --- | --- | --- |
+| `SLEEVE_1` | Oct 1, 2026 | INVH, PM, BAC, UNH, GOOGL, VLO |
+| `SLEEVE_2` | Nov 2, 2026 | ADSK, MAS, BG, WFC, TSCO |
+| `SLEEVE_3` | planned December 2026 | empty |
+| `SLEEVE_4` | planned January 2027 | empty |
+
+**Funding a sleeve:** open it in the app, enter its stocks and purchase date, and press Fund. This
+fetches the opens, writes the ledger rows, and pulls prices. **Later trades:** use *Record a trade*
+on the sleeve's History tab, or import a CSV on its Transactions tab.
+
+The pre-sleeve `PORTFOLIO_5` account stays in the database, archived: it's left out of the
+portfolio and of refreshes.
 
 ## Repository layout
 
@@ -33,7 +48,7 @@ python3 -m venv .venv
 .venv/bin/python -m app.cli bootstrap
 
 # 4. First market-data refresh (prices + dividends/splits since inception)
-.venv/bin/python -m app.cli refresh
+.venv/bin/python -m app.cli refresh       # also builds the S&P 500 heatmap (~1 min)
 
 # 5. Run the API
 .venv/bin/uvicorn app.main:app --port 8000

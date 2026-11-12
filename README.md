@@ -1,116 +1,69 @@
 # Portfolio Tracker
 
-A personal portfolio dashboard that tracks a real brokerage account day-to-day and puts
-institutional-grade performance and risk analytics, the kind normally locked inside
-brokerage/quant tooling, in front of a single investor.
+A personal dashboard for a portfolio run as **four equally funded sleeves** of 4–6 stocks. Each
+sleeve is bought in equal dollars at a single day's open, and the sleeves roll up into one
+portfolio measured against SPY and QQQ, with institutional-grade performance and risk analytics
+refreshed automatically every trading day.
 
-It ingests an append-only transaction ledger (buys, sells, dividends, splits, deposits,
-withdrawals), reconstructs daily positions and cash from it, pulls in daily market data,
-and turns that history into time-weighted returns, benchmark comparisons, factor exposure,
-correlation/PCA diversification analysis, and more, refreshed automatically every trading day.
+It ingests an append-only transaction ledger per sleeve (buys, sells, dividends, splits, deposits,
+withdrawals), reconstructs daily positions and cash from it, pulls in daily market data, and turns
+that history into time-weighted returns, benchmark comparisons, factor exposure and correlation/PCA
+diversification analysis.
 
-## Overview
+## Portfolio
 
-The landing page: current value, today's move, total return, CAGR, and excess return vs.
-SPY and QQQ side by side, a "growth of $100" chart since inception, and concentration stats
-(effective number of holdings, top-5/10/20 weight).
+The whole book: value, today's move, return against SPY and QQQ, a card for each sleeve, equity and
+gain curves, and a full statistics table (CAGR, volatility, max drawdown, Sharpe, Sortino, Calmar,
+beta, R², correlation, alpha, information ratio) for the portfolio, SPY and QQQ. New sleeves join
+as they're funded, and the benchmarks receive the same money on the same dates.
 
-![Overview](screenshots/overview.png)
+![Portfolio overview](screenshots/portfolio.png)
 
-## Performance
+**Performance** adds rolling beta, volatility and correlation, drawdowns, period returns, and daily
+and monthly return calendars. **Holdings** lists every position with sector allocation and return
+contribution.
 
-The deepest page in the app. For any selected range (inception, YTD, 1M/3M/6M/1Y, or a
-custom window):
+## Heatmaps
 
-**Growth of $100** and **matched-cash-flow dollar value** vs. SPY/QQQ, where benchmarks
-receive the same external cash flows on the same dates so the comparison isn't distorted by
-when money came in or out, alongside **daily and cumulative time-weighted return**.
+One period control (today, week, month to date, month, 3 months, year to date, year, since purchase)
+drives a treemap of your holdings, a table of every holding across every period, and a map of all
+~500 S&P 500 companies sized by SPY's published weights.
 
-![Performance: growth of $100, matched cash flow, daily & cumulative return](screenshots/performance-growth.png)
+![Heatmaps](screenshots/heatmaps.png)
 
-**Drawdown** vs. both benchmarks:
+## Sleeves
 
-![Performance: drawdown](screenshots/performance-drawdown.png)
+Each sleeve opens to its own tabs.
 
-**Rolling statistics**, beta, annualized volatility, and correlation vs. SPY/QQQ, over
-30/90/252-day windows, plus a period-return table and a since-inception stats table (CAGR,
-volatility, max drawdown, Sharpe, Sortino, Calmar, beta, R², correlation, alpha, information
-ratio) for the portfolio, SPY, and QQQ side by side:
+**Overview:** the sleeve against SPY and QQQ, current holdings, and its statistics.
 
-![Performance: rolling beta, volatility, correlation](screenshots/performance-rolling.png)
+![Sleeve overview](screenshots/sleeve-overview.png)
 
-A **GitHub-style daily return calendar** and a **monthly returns heatmap**:
+**Stocks:** every holding against its sector ETF, SPY and QQQ from the purchase-day open, with its
+return split into market, sector and stock itself, to show whether a stock is really working or
+just riding its sector.
 
-![Performance: daily return calendar and monthly returns](screenshots/performance-calendar.png)
+![Sleeve stocks](screenshots/sleeve-stocks.png)
 
-A **Monte Carlo simulator** compares the actual stock picks against N random,
-equal-weight, same-size baskets drawn from the S&P 500 universe, all invested on the same
-date, and reports what percentile the real picks landed in against pure chance. The chart
-below shows the actual portfolio (blue) threading through 50 random-pick simulations,
-beating the median and mean of chance selection:
+**Risk:** the sleeve over the year before purchase, or the latest year: beta, volatility, drawdown,
+VaR, correlation matrix, PCA (including PC1), factor exposure, risk contribution, and sector
+exposure against the S&P 500.
 
-![Performance: Monte Carlo, stock picking vs. random selection](screenshots/monte-carlo.png)
+![Sleeve risk](screenshots/sleeve-risk.png)
 
-## Holdings
+**History:** every open and closed position with its excess return over SPY, QQQ and its sector ETF
+across exactly its holding window, plus a form for recording trades.
 
-A sortable, searchable table of every position (shares, cost basis, price, weight, day and
-total return, beta, beta contribution), a sector-allocation donut, and a holdings treemap
-(tile size = value, color = today's return), plus a top-holdings bar chart, a concentration
-curve, target-vs-current drift, and per-holding return contribution further down the page.
+![Sleeve history](screenshots/sleeve-history.png)
 
-![Holdings: table, sector allocation, treemap](screenshots/holdings.png)
-
-## Heatmap
-
-A SPY-style sector treemap of the whole book: tile size is portfolio weight, color is
-return over the selected period (daily/weekly/monthly/since-inception), plus a
-weight-weighted sector performance bar chart.
-
-![Heatmap: sector treemap, since inception](screenshots/heatmap.png)
-
-## Risk
-
-The quant toolbox: trailing beta and correlation vs. SPY/QQQ, historical VaR/CVaR at 95% and
-99%, security beta contributions, and contribution to risk by holding and by sector, plus
-two deeper diversification views.
-
-**Diversification via PCA**, principal component analysis on the trailing correlation
-matrix of current holdings: effective number of independent bets (not just position count), a
-variance-explained scree plot, and the dominant factor's top loadings.
-
-![Risk: PCA diversification](screenshots/risk-pca.png)
-
-**Correlation matrix**, full pairwise Pearson correlation across holdings, so you can see
-directly which positions actually move together instead of inferring it from sector labels.
-
-![Risk: correlation matrix](screenshots/risk-correlation.png)
-
-Also on this page: **factor exposure** to momentum, value, quality, low-volatility, and
-small-cap style ETFs, to surface style concentration that sector diversification alone
-wouldn't catch.
-
-## History
-
-Fully closed-out positions with realized gain and CAGR, and a timeline of composition-change
-events: what was added/removed and how sector allocation shifted at each rebalance. The
-snapshot below is a real rebalance this account went through, captured with before/after
-holdings and sector mix:
-
-![History: closed positions and rebalance event](screenshots/history-rebalance.png)
-
-## Transactions
-
-The full, append-only ledger, every buy, sell, dividend, deposit, withdrawal, fee, split,
-and symbol change, filterable and searchable, with CSV import/export so new activity is a
-data change, never a code change. The rebalance visible above (swapping CIEN/SPGI/ADSK for
-ROST/NUE/ABBV) is just new rows here, no code changes required.
-
-![Transactions: full ledger](screenshots/transactions.png)
+**Performance** and **Transactions** give the same deep views as the portfolio, plus a Monte Carlo
+test of the sleeve's picks against random S&P 500 baskets. An empty sleeve shows a form for funding
+it instead.
 
 ## Data Quality
 
-A transparency page: sync status per symbol, stale/failed price fetches, and refresh-run
-history, so it's always clear how fresh and complete the underlying data is.
+A transparency page: sync status per symbol, stale/failed price fetches, and refresh-run history, so
+it's always clear how fresh and complete the underlying data is.
 
 ---
 
@@ -121,7 +74,7 @@ history, so it's always clear how fresh and complete the underlying data is.
 - **Time-weighted returns (TWR)** for performance that isn't distorted by when cash moved in or
   out, geometrically linked daily; **XIRR** for money-weighted, dollar-actual returns.
 - **Benchmarks** (SPY, QQQ) receive the identical external cash flows on the identical dates, so
-  "vs. benchmark" comparisons are apples-to-apples.
+  "vs. benchmark" comparisons are apples-to-apples, including as each sleeve is funded.
 - **Beta, alpha, VaR/CVaR, factor exposure, and PCA-based diversification** are computed directly
   from daily return history, never approximated from vendor betas or static weights.
 - Prices refresh automatically on a daily schedule; intraday data is marked provisional until

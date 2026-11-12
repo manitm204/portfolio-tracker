@@ -1,14 +1,15 @@
 """Assembles analytics into API-shaped payloads.
 
-``account_key`` is either a real account id or the pseudo-account
-``combined``, which merges the ledgers of every account (positions and cash
-sum; the combined benchmark receives both accounts' external flows on their
-own dates, so differing inceptions are respected).
+``account_key`` is either a sleeve's account id or the pseudo-account
+``combined``: the whole portfolio, which merges every live sleeve's ledger
+(positions and cash sum; the combined benchmark receives each sleeve's external
+flows on their own dates, so staggered sleeve starts are respected).
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 from typing import Any
 
 import numpy as np
@@ -31,9 +32,15 @@ from .analytics import diversification as div
 from .analytics.positions import daily_positions, external_flow_list, load_ledger
 from .config import get_settings
 from .market_data import get_market_data_client
-from .ingestion import FACTOR_ETFS, SECTOR_ETFS, TRAILING_LOOKBACK_CALENDAR_DAYS
+from .ingestion import (
+    FACTOR_ETFS,
+    INDEX_PERIODS,
+    SECTOR_ETFS,
+    TRAILING_LOOKBACK_CALENDAR_DAYS,
+)
 from .models import (
     Account,
+    IndexConstituent,
     ModelTarget,
     PriceBar,
     RefreshRun,
@@ -57,9 +64,9 @@ ROLLING_WINDOWS = (30, 90, 252)
 # on-demand fetch — see ``_trailing_returns``.
 TRAILING_TRADING_DAYS = 252
 
-# Accounts the Monte Carlo comparison can simulate: equal dollars across N
-# randomly chosen S&P 500 tickers, same convention as the real portfolio.
-MONTE_CARLO_ACCOUNTS = {"PORTFOLIO_5"}
+# Below this many calendar days a holding-period CAGR only amplifies noise
+# (the position-level match for the min_obs_vol sessions used by risk.cagr).
+MIN_CAGR_HOLD_DAYS = 7
 
 
 class UnknownAccount(Exception):
@@ -71,33 +78,43 @@ class UnsupportedMonteCarlo(Exception):
 
 
 def resolve_account_ids(db: Session, account_key: str) -> list[str]:
-    ids = [a for (a,) in db.execute(select(Account.id))]
+    rows = db.execute(select(Account.id, Account.archived)).all()
     if account_key == COMBINED:
-        return ids
-    if account_key in ids:
+        return [a for a, archived in rows if not archived]
+    if any(a == account_key for a, _ in rows):
         return [account_key]
     raise UnknownAccount(account_key)
 
 
+def _live_accounts(db: Session) -> list[Account]:
+    accounts = db.execute(select(Account).where(Account.archived.is_(False))).scalars()
+    return sorted(accounts, key=lambda a: (a.sleeve_number or 0, a.id))
+
+
 def list_accounts(db: Session) -> list[dict]:
-    accounts = db.execute(select(Account).order_by(Account.start_date)).scalars().all()
+    accounts = _live_accounts(db)
     out = [
         {
             "id": a.id,
             "display_name": a.display_name,
-            "start_date": a.start_date.isoformat(),
+            "sleeve_number": a.sleeve_number,
+            "start_date": a.start_date.isoformat() if a.start_date else None,
+            "planned_start": a.planned_start,
             "starting_cash": a.starting_cash,
             "benchmarks": [a.benchmark_1, a.benchmark_2],
         }
         for a in accounts
     ]
-    if len(accounts) > 1:
+    starts = [a.start_date for a in accounts if a.start_date]
+    if len(accounts) > 1 and starts:
         out.append(
             {
                 "id": COMBINED,
-                "display_name": "Combined",
-                "start_date": min(a.start_date for a in accounts).isoformat(),
-                "starting_cash": sum(a.starting_cash for a in accounts),
+                "display_name": "Portfolio",
+                "sleeve_number": None,
+                "start_date": min(starts).isoformat(),
+                "planned_start": None,
+                "starting_cash": sum(a.starting_cash for a in accounts if a.start_date),
                 "benchmarks": ["SPY", "QQQ"],
             }
         )
@@ -113,13 +130,16 @@ class AccountContext:
         self.key = account_key
         self.account_ids = resolve_account_ids(db, account_key)
         accounts = [db.get(Account, a) for a in self.account_ids]
-        self.inception: dt.date = min(a.start_date for a in accounts)
+        self.today = dt.date.today()
+        # An unfunded sleeve has no start date: its context is simply empty.
+        self.inception: dt.date = min(
+            (a.start_date for a in accounts if a.start_date), default=self.today
+        )
         self.benchmarks = ["SPY", "QQQ"]
         self.factor_etfs = list(FACTOR_ETFS)
         self.sector_etfs = SECTOR_ETFS
 
         self.ledger = load_ledger(db, self.account_ids)
-        self.today = dt.date.today()
         self.calendar = trading_calendar(db, self.inception, self.today)
 
         tickers = sorted(
@@ -457,7 +477,7 @@ def holdings_payload(ctx: AccountContext) -> dict:
     sectors = ctx.sectors()
     rows: list[dict] = []
     if ctx.ticker_values.empty or ctx.mv.empty:
-        return {"account": ctx.key, "holdings": [], "inactive": _inactive_rows(targets)}
+        return {"account": ctx.key, "holdings": []}
 
     last_shares = (
         ctx.shares.iloc[-1] if not ctx.shares.empty else pd.Series(dtype=float)
@@ -467,6 +487,7 @@ def holdings_payload(ctx: AccountContext) -> dict:
     weights = alloc.weights_from_values(active)
 
     cost_basis = _cost_basis(ctx)
+    sleeves = _sleeve_labels(ctx)
     s = get_settings()
     # Trailing ~1-year beta per holding (its own market history, independent
     # of account inception), matching the methodology used on the Risk page.
@@ -514,9 +535,7 @@ def holdings_payload(ctx: AccountContext) -> dict:
             {
                 "ticker": ticker,
                 "sector": sectors.get(ticker, "Unknown"),
-                "composite_score": targets[ticker].composite_score
-                if ticker in targets
-                else None,
+                "sleeves": sleeves.get(ticker, []),
                 "shares": round(shares, 6),
                 "cost_basis": _round_or_none(cost, 2),
                 "avg_cost": _round_or_none(cb.get("avg_cost"), 4),
@@ -546,20 +565,19 @@ def holdings_payload(ctx: AccountContext) -> dict:
             }
         )
     rows.sort(key=lambda r: r["market_value"], reverse=True)
-    return {"account": ctx.key, "holdings": rows, "inactive": _inactive_rows(targets)}
+    return {"account": ctx.key, "holdings": rows}
 
 
-def _inactive_rows(targets: dict[str, ModelTarget]) -> list[dict]:
-    return [
-        {
-            "ticker": t.ticker,
-            "sector": t.sector,
-            "composite_score": t.composite_score,
-            "note": "Inactive candidate — excluded from all portfolio statistics",
-        }
-        for t in targets.values()
-        if not t.active
-    ]
+def _sleeve_labels(ctx: AccountContext) -> dict[str, list[str]]:
+    """Ticker → names of the sleeves currently holding it."""
+    names = {a.id: a.display_name for a in _live_accounts(ctx.db)}
+    held: dict[str, list[str]] = {}
+    for ep in _walk_positions(ctx.ledger):
+        if ep["close_date"] is None:
+            held.setdefault(ep["ticker"], []).append(
+                names.get(ep["account_id"], ep["account_id"])
+            )
+    return {t: sorted(v) for t, v in held.items()}
 
 
 def _cost_basis(ctx: AccountContext) -> dict[str, dict]:
@@ -658,7 +676,102 @@ def allocation_payload(ctx: AccountContext) -> dict:
     }
 
 
-def risk_payload(ctx: AccountContext) -> dict:
+def _risk_window_end(ctx: AccountContext, window: str) -> tuple[dt.date, dt.date | None]:
+    """(last day of the cross-sectional window, purchase date it is anchored to).
+
+    ``purchase`` ends the day before the most recent buy of a current holding,
+    so every stat describes what was knowable when the position was opened and
+    no look-ahead from the holding period leaks in. ``trailing`` ends today.
+    """
+    if window == "purchase":
+        entries = [
+            dt.date.fromisoformat(ep["open_date"])
+            for ep in _walk_positions(ctx.ledger)
+            if ep["close_date"] is None
+        ]
+        if entries:
+            anchor = max(entries)
+            return anchor - dt.timedelta(days=1), anchor
+    return ctx.today, None
+
+
+def _historical_profile(
+    returns: pd.DataFrame, weights: pd.Series, tickers: list[str]
+) -> dict | None:
+    """Risk of today's weights replayed over the window — the sleeve as if it
+    had been held throughout, so a days-old sleeve still has a real profile."""
+    s = get_settings()
+    cols = [t for t in tickers if t in returns.columns]
+    hist = returns[cols].dropna(how="any") if cols else pd.DataFrame()
+    if len(hist) < max(s.min_obs_beta, 2):
+        return None
+    w = weights.reindex(cols) / weights.reindex(cols).sum()
+    port = hist @ w
+    spy = returns["SPY"] if "SPY" in returns.columns else pd.Series(dtype=float)
+    qqq = returns["QQQ"] if "QQQ" in returns.columns else pd.Series(dtype=float)
+    mdd, _ = perf.max_drawdown(port)
+    spy_mdd, _ = perf.max_drawdown(spy.dropna())
+    var95, cvar95 = risk.var_cvar(port, 0.95)
+    var99, cvar99 = risk.var_cvar(port, 0.99)
+    vol = risk.annualized_volatility(port)
+    weighted_vol = float((hist.std(ddof=1) * np.sqrt(s.trading_days_per_year) * w).sum())
+    corr = hist.corr().to_numpy() if len(cols) > 1 else None
+    pairs = corr[np.triu_indices_from(corr, k=1)] if corr is not None else None
+    return {
+        "observations": int(len(hist)),
+        "total_return": _round_or_none(perf.twr_total(port)),
+        "spy_total_return": _round_or_none(perf.twr_total(spy.dropna())),
+        "beta_spy": _round_or_none(risk.beta(port, spy), 4),
+        "beta_qqq": _round_or_none(risk.beta(port, qqq), 4),
+        "correlation_spy": _round_or_none(risk.correlation(port, spy), 4),
+        "correlation_qqq": _round_or_none(risk.correlation(port, qqq), 4),
+        "volatility": _round_or_none(vol, 4),
+        "spy_volatility": _round_or_none(risk.annualized_volatility(spy), 4),
+        "sharpe": _round_or_none(risk.sharpe(port), 4),
+        "sortino": _round_or_none(risk.sortino(port), 4),
+        "max_drawdown": _round_or_none(mdd, 4),
+        "spy_max_drawdown": _round_or_none(spy_mdd, 4),
+        "var_95": _round_or_none(var95),
+        "cvar_95": _round_or_none(cvar95),
+        "var_99": _round_or_none(var99),
+        "cvar_99": _round_or_none(cvar99),
+        "average_correlation": _round_or_none(float(pairs.mean()), 4)
+        if pairs is not None and len(pairs)
+        else None,
+        "diversification_ratio": _round_or_none(weighted_vol / vol, 3) if vol else None,
+    }
+
+
+def _sector_vs_index(
+    db: Session, values: pd.Series, sectors: dict[str, str]
+) -> list[dict]:
+    """Current sector weights next to the S&P 500's, from the cached fund weights."""
+    rows = db.execute(
+        select(IndexConstituent.sector, IndexConstituent.weight).where(
+            IndexConstituent.index_name == "sp500", IndexConstituent.weight.isnot(None)
+        )
+    ).all()
+    index_weights: dict[str, float] = {}
+    for sector, weight in rows:
+        if sector and sector != "Unknown":
+            index_weights[sector] = index_weights.get(sector, 0.0) + weight
+    mine = {r["sector"]: r["weight"] for r in alloc.sector_allocation(values, sectors)}
+    out = [
+        {
+            "sector": sector,
+            "weight": round(mine.get(sector, 0.0), 6),
+            "index_weight": round(index_weights[sector], 6)
+            if sector in index_weights
+            else None,
+            "etf_ticker": SECTOR_ETFS.get(sector),
+        }
+        for sector in sorted(set(mine) | set(index_weights))
+    ]
+    out.sort(key=lambda r: -r["weight"])
+    return out
+
+
+def risk_payload(ctx: AccountContext, window: str = "purchase") -> dict:
     s = get_settings()
     spy_pr = ctx.bench_returns["SPY"]
     qqq_pr = ctx.bench_returns["QQQ"]
@@ -682,13 +795,14 @@ def risk_payload(ctx: AccountContext) -> dict:
     matrix_tickers = list(held_ranked.head(30).index)
 
     # Every cross-sectional style stat below (security beta, factor exposure,
-    # correlation matrix, PCA) uses each held ticker's own trailing ~1-year
-    # price history, never the account's short inception-to-date window — a
-    # stock you bought 5 days ago still gets a real trailing-year beta/
-    # correlation from its actual market history, not "insufficient history".
-    trailing_universe = sorted(set(held_tickers) | {"SPY"} | set(FACTOR_ETFS))
+    # correlation matrix, PCA, risk contribution) uses each held ticker's own
+    # ~1-year price history, never the account's short inception-to-date window
+    # — a stock you bought 5 days ago still gets a real beta/correlation from
+    # its actual market history, not "insufficient history".
+    window_end, anchor = _risk_window_end(ctx, window)
+    trailing_universe = sorted(set(held_tickers) | {"SPY", "QQQ"} | set(FACTOR_ETFS))
     trailing_returns, trailing_obs = _trailing_returns(
-        ctx.db, trailing_universe, ctx.today
+        ctx.db, trailing_universe, window_end
     )
     trailing_spy = (
         trailing_returns["SPY"] if "SPY" in trailing_returns.columns else pd.Series(dtype=float)
@@ -771,8 +885,8 @@ def risk_payload(ctx: AccountContext) -> dict:
 
     sectors = ctx.sectors()
     rc = (
-        alloc.risk_contributions(ctx.ticker_returns, weights)
-        if not ctx.ticker_returns.empty
+        alloc.risk_contributions(trailing_returns, weights)
+        if not trailing_returns.empty
         else []
     )
     rc_sector: dict[str, float] = {}
@@ -870,68 +984,94 @@ def risk_payload(ctx: AccountContext) -> dict:
         "factor_exposure": factor_exposure,
         "correlation_matrix": correlation_matrix,
         "diversification": diversification,
+        "historical": _historical_profile(trailing_returns, weights, held_tickers)
+        if not trailing_returns.empty
+        else None,
+        "sector_vs_index": _sector_vs_index(ctx.db, last_values, sectors)
+        if not last_values.empty
+        else [],
         "trailing_window": {
+            "mode": "purchase" if anchor else "trailing",
+            "anchor_date": anchor.isoformat() if anchor else None,
+            "start": trailing_returns.index[0].date().isoformat()
+            if not trailing_returns.empty
+            else None,
+            "end": trailing_returns.index[-1].date().isoformat()
+            if not trailing_returns.empty
+            else None,
             "target_trading_days": TRAILING_TRADING_DAYS,
             "observations": trailing_obs,
         },
     }
 
 
-HEATMAP_PERIODS = ("1D", "1W", "1M", "MTD", "SI")
+HEATMAP_PERIODS = (*INDEX_PERIODS, "SI")
 
 
-def _price_period_return(ser: pd.Series, period: str, end: pd.Timestamp) -> float | None:
-    """Simple price return over ``period`` ending at ``end``, from a series
-    already forward-filled onto the account's trading calendar. ``period ==
-    "SI"`` uses the series' first calendar observation (account inception) as
-    the base; ``"MTD"`` uses the last close before the start of ``end``'s
-    calendar month."""
-    ser = ser.dropna()
-    if len(ser) < 2:
-        return None
-    if period == "1D":
-        return float(ser.iloc[-1] / ser.iloc[-2] - 1.0)
-    if period == "SI":
-        return float(ser.iloc[-1] / ser.iloc[0] - 1.0)
-    if period == "MTD":
-        cutoff = end.replace(day=1)
-    else:
-        delta = {"1W": pd.Timedelta(days=7), "1M": pd.DateOffset(months=1)}[period]
-        cutoff = end - delta
-    base = ser[ser.index < cutoff] if period == "MTD" else ser[ser.index <= cutoff]
-    base_val = base.iloc[-1] if len(base) else ser.iloc[0]
-    return float(ser.iloc[-1] / base_val - 1.0)
+def _long_adj_closes(ctx: AccountContext, tickers: list[str]) -> pd.DataFrame:
+    """Adjusted closes reaching back past inception: a stock's 1Y return isn't
+    limited by how long it has been owned."""
+    start = ctx.today - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
+    adj = close_matrix(load_price_frame(ctx.db, tickers, start, ctx.today), "adj_close")
+    filled, _ = ffill_with_coverage(adj, trading_calendar(ctx.db, start, ctx.today))
+    return filled
+
+
+def _period_returns(
+    closes: pd.DataFrame, ticker: str, end: pd.Timestamp | None
+) -> dict[str, float | None]:
+    if end is None or ticker not in closes.columns:
+        return {p: None for p in INDEX_PERIODS}
+    return {
+        p: _round_or_none(perf.price_period_return(closes[ticker], p, end))
+        for p in INDEX_PERIODS
+    }
 
 
 def heatmap_payload(ctx: AccountContext, period: str = "1D") -> dict:
     if period not in HEATMAP_PERIODS:
         period = "1D"
+    empty = {
+        "account": ctx.key,
+        "period": period,
+        "periods": list(HEATMAP_PERIODS),
+        "tiles": [],
+        "sectors": [],
+    }
     if ctx.ticker_values.empty:
-        return {"account": ctx.key, "period": period, "tiles": []}
+        return empty
     sectors = ctx.sectors()
     last_shares = ctx.shares.iloc[-1]
     last_values = ctx.ticker_values.iloc[-1]
     active = last_values[last_shares.reindex(last_values.index).fillna(0.0) > 0]
+    if active.empty:
+        return empty
     weights = alloc.weights_from_values(active)
     cost_basis = _cost_basis(ctx)
+    sleeves = _sleeve_labels(ctx)
 
-    end = ctx.adj_closes.index[-1] if not ctx.adj_closes.empty else None
+    closes = _long_adj_closes(
+        ctx, [*active.index, *ctx.benchmarks, *ctx.sector_etfs.values()]
+    )
+    end = closes.index[-1] if not closes.empty else None
     tiles = []
     for ticker, value in active.items():
-        ret = None
-        if period == "SI":
-            cb = cost_basis.get(ticker)
-            if cb and cb.get("cost"):
-                ret = float(value) / cb["cost"] - 1.0
-        elif end is not None and ticker in ctx.adj_closes.columns:
-            ret = _price_period_return(ctx.adj_closes[ticker], period, end)
+        returns: dict[str, float | None] = _period_returns(closes, ticker, end)
+        cb = cost_basis.get(ticker)
+        returns["SI"] = (
+            _round_or_none(float(value) / cb["cost"] - 1.0)
+            if cb and cb.get("cost")
+            else None
+        )
         tiles.append(
             {
                 "ticker": ticker,
                 "sector": sectors.get(ticker, "Unknown"),
+                "sleeves": sleeves.get(ticker, []),
                 "weight": round(float(weights[ticker]), 6),
                 "value": round(float(value), 2),
-                "return": _round_or_none(ret),
+                "return": returns[period],
+                "returns": returns,
             }
         )
     tiles.sort(key=lambda t: (t["sector"], -t["weight"]))
@@ -948,8 +1088,12 @@ def heatmap_payload(ctx: AccountContext, period: str = "1D") -> dict:
         my_ret = round(v["wret"] / v["weight"], 6) if v["weight"] > 0 else None
         etf_ticker = ctx.sector_etfs.get(k)
         etf_ret = None
-        if end is not None and etf_ticker and etf_ticker in ctx.sector_etf_closes.columns:
-            etf_ret = _price_period_return(ctx.sector_etf_closes[etf_ticker], period, end)
+        if end is not None and etf_ticker:
+            # "SI" must mean this account's inception, not the start of the
+            # long history; sector_etf_closes begins there.
+            source = ctx.sector_etf_closes if period == "SI" else closes
+            if etf_ticker in source.columns:
+                etf_ret = perf.price_period_return(source[etf_ticker], period, end)
         sector_rows.append(
             {
                 "sector": k,
@@ -962,12 +1106,73 @@ def heatmap_payload(ctx: AccountContext, period: str = "1D") -> dict:
                 else None,
             }
         )
+    benchmarks = {
+        b: {
+            **_period_returns(closes, b, end),
+            "SI": _round_or_none(perf.twr_total(ctx.bench_returns[b])),
+        }
+        for b in ctx.benchmarks
+    }
+    return {**empty, "tiles": tiles, "sectors": sector_rows, "benchmarks": benchmarks}
+
+
+def index_heatmap_payload(db: Session, period: str = "1D") -> dict:
+    """S&P 500 map from the stored snapshot, sized by SPY's published weights."""
+    if period not in INDEX_PERIODS:
+        period = "1D"
+    rows = (
+        db.execute(
+            select(IndexConstituent).where(
+                IndexConstituent.index_name == "sp500",
+                IndexConstituent.period_returns.isnot(None),
+                IndexConstituent.weight.isnot(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    unpriced = db.execute(
+        select(IndexConstituent.ticker).where(
+            IndexConstituent.index_name == "sp500",
+            IndexConstituent.period_returns.is_(None),
+            IndexConstituent.weight.isnot(None),
+        )
+    ).scalars().all()
+    tiles = []
+    sector_acc: dict[str, dict[str, float]] = {}
+    for r in rows:
+        ret = json.loads(r.period_returns).get(period)
+        sector = r.sector or "Unknown"
+        tiles.append(
+            {
+                "ticker": r.ticker,
+                "name": r.name,
+                "sector": sector,
+                "weight": round(r.weight, 6),
+                "return": _round_or_none(ret),
+            }
+        )
+        if ret is not None:
+            acc = sector_acc.setdefault(sector, {"weight": 0.0, "wret": 0.0})
+            acc["weight"] += r.weight
+            acc["wret"] += r.weight * ret
+    tiles.sort(key=lambda t: (t["sector"], -t["weight"]))
     return {
-        "account": ctx.key,
         "period": period,
-        "periods": list(HEATMAP_PERIODS),
+        "periods": list(INDEX_PERIODS),
+        "as_of": max((r.returns_as_of for r in rows), default=None),
+        "unpriced": sorted(unpriced),
         "tiles": tiles,
-        "sectors": sector_rows,
+        "sectors": [
+            {
+                "sector": k,
+                "weight": round(v["weight"], 6),
+                "return": round(v["wret"] / v["weight"], 6),
+                "etf_ticker": SECTOR_ETFS.get(k),
+            }
+            for k, v in sorted(sector_acc.items(), key=lambda kv: -kv[1]["weight"])
+            if v["weight"] > 0
+        ],
     }
 
 
@@ -998,11 +1203,10 @@ def monte_carlo_payload(
 ) -> dict:
     """Actual portfolio vs ``sims`` random same-size picks from the S&P 500,
     invested at the account's inception date using the same weighting
-    philosophy as the real portfolio (see ``MONTE_CARLO_ACCOUNTS``)."""
-    if ctx.key not in MONTE_CARLO_ACCOUNTS:
-        raise UnsupportedMonteCarlo(
-            f"Monte Carlo comparison is only available for: {', '.join(sorted(MONTE_CARLO_ACCOUNTS))}"
-        )
+    philosophy as the real portfolio. Sleeve-level only: the whole portfolio
+    has no single inception date to invest a random basket on."""
+    if ctx.key == COMBINED:
+        raise UnsupportedMonteCarlo("Monte Carlo comparison is per sleeve")
     targets = [t for t in ctx.targets() if t.active]
     actual = perf.growth_of_100(ctx.returns)
     if not targets or actual.empty:
@@ -1071,11 +1275,11 @@ def _adj_close_matrix(db: Session, tickers: list[str], ctx: AccountContext) -> p
 
 
 def _trailing_returns(
-    db: Session, tickers: list[str], today: dt.date
+    db: Session, tickers: list[str], end: dt.date
 ) -> tuple[pd.DataFrame, int]:
-    """Each ticker's own trailing ~1-year (up to 252 trading day) daily return
-    series, independent of the account's inception date or how long a position
-    has actually been held.
+    """Each ticker's own ~1-year (up to 252 trading day) daily return series
+    ending at ``end``, independent of the account's inception date or how long
+    a position has actually been held.
 
     Pure DB read — the ingestion job is responsible for keeping
     ``TRAILING_LOOKBACK_CALENDAR_DAYS`` of history cached for every tracked
@@ -1085,171 +1289,217 @@ def _trailing_returns(
     """
     if not tickers:
         return pd.DataFrame(), 0
-    start = today - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
-    calendar = trading_calendar(db, start, today)[-TRAILING_TRADING_DAYS:]
+    start = end - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
+    calendar = trading_calendar(db, start, end)[-TRAILING_TRADING_DAYS:]
     if len(calendar) == 0:
         return pd.DataFrame(), 0
-    frame = load_price_frame(db, tickers, start, today)
+    frame = load_price_frame(db, tickers, start, end)
     adj = close_matrix(frame, "adj_close")
     filled, _ = ffill_with_coverage(adj, calendar)
     returns = filled.pct_change().iloc[1:]
     return returns, int(len(calendar))
 
 
-def account_contributions(db: Session) -> list[dict]:
-    """Per-account share of the combined value and return (combined view)."""
-    out = []
-    for aid in resolve_account_ids(db, COMBINED):
-        ctx = AccountContext(db, aid)
-        if ctx.mv.empty:
-            continue
-        twr = perf.twr_total(ctx.returns)
-        invested = float(sum(f for _, f in ctx.ext_flows))
-        out.append(
+def _bench_bars(
+    db: Session, tickers: list[str], start: dt.date, end: dt.date
+) -> dict[str, pd.DataFrame]:
+    """Per-ticker frame of ``adj_open``/``adj_close``, the same fallback as the
+    benchmark simulator when a provider has no adjusted open."""
+    frame = load_price_frame(db, sorted(set(tickers)), start, end)
+    out: dict[str, pd.DataFrame] = {}
+    for ticker, g in frame.groupby("ticker"):
+        g = g.set_index("date").sort_index()
+        factor = g["adj_close"] / g["close"]
+        out[ticker] = pd.DataFrame(
             {
-                "account": aid,
-                "value": round(float(ctx.mv.iloc[-1]), 2),
-                "invested": round(invested, 2),
-                "gain": round(float(ctx.mv.iloc[-1]) - invested, 2),
-                "twr": _round_or_none(twr),
+                "adj_open": g["adj_open"].astype(float).fillna(g["open"] * factor),
+                "adj_close": g["adj_close"].astype(float),
             }
-        )
+        ).dropna(subset=["adj_close"])
     return out
 
 
-def _bench_closes(
-    db: Session, start: dt.date, end: dt.date, extra: list[str] | None = None
-) -> dict[str, pd.Series]:
-    """Adjusted-close series for SPY/QQQ (plus any ``extra`` tickers, e.g. the
-    sector SPDR ETFs), used as a same-period CAGR yardstick for closed
-    positions (see ``_realized_trades``)."""
-    tickers = ["SPY", "QQQ", *(extra or [])]
-    frame = load_price_frame(db, tickers, start, end)
-    adj = close_matrix(frame, "adj_close")
-    return {t: adj[t].dropna() for t in adj.columns}
+def _entry_price(bars: pd.DataFrame, open_date: dt.date) -> float | None:
+    """Adjusted open on the purchase date, matching a fill at the open."""
+    ts = pd.Timestamp(open_date)
+    if ts in bars.index and pd.notna(bars.at[ts, "adj_open"]):
+        return float(bars.at[ts, "adj_open"])
+    price = bars["adj_close"].asof(ts)
+    return None if pd.isna(price) else float(price)
 
 
-def _bench_cagr(series: pd.Series | None, open_date: dt.date, close_date: dt.date) -> float | None:
-    if series is None or series.empty:
+def _window_return(
+    bars: pd.DataFrame | None, open_date: dt.date, close_date: dt.date
+) -> float | None:
+    """Total return from the open of ``open_date`` to the close of ``close_date``."""
+    if bars is None or bars.empty:
         return None
-    hold_days = (close_date - open_date).days
-    if hold_days <= 0:
+    entry = _entry_price(bars, open_date)
+    exit_price = bars["adj_close"].asof(pd.Timestamp(close_date))
+    if entry is None or entry <= 0 or pd.isna(exit_price):
         return None
-    start_price = series.asof(pd.Timestamp(open_date))
-    end_price = series.asof(pd.Timestamp(close_date))
-    if pd.isna(start_price) or pd.isna(end_price) or start_price <= 0:
+    return float(exit_price) / entry - 1.0
+
+
+def _annualize(total: float | None, hold_days: int) -> float | None:
+    if total is None or hold_days < MIN_CAGR_HOLD_DAYS or total <= -1.0:
         return None
-    return (end_price / start_price) ** (365.0 / hold_days) - 1.0
+    return (1.0 + total) ** (365.0 / hold_days) - 1.0
 
 
-def _realized_trades(
-    ledger: list[Transaction],
-    bench_closes: dict[str, pd.Series] | None = None,
-    sectors: dict[str, str] | None = None,
-) -> list[dict]:
-    """Closed positions (fully sold out): realized gain %, holding period, CAGR.
+def _walk_positions(ledger: list[Transaction]) -> list[dict]:
+    """Every position episode in the ledger, open and closed.
 
-    Walks the ledger per ticker in chronological order using the same
-    average-cost method as ``_cost_basis``. Each time a position returns to
-    ~zero shares after being open, that closes a "trade episode" — buying the
-    same ticker again later starts a new, separate episode.
-
-    ``bench_closes`` (SPY/QQQ plus sector-SPDR adjusted-close series) lets each
-    episode report the CAGR excess vs. holding the benchmark over that same
-    open/close window instead — an apples-to-apples "did this beat the market"
-    number. ``sectors`` (ticker → GICS sector) selects which sector SPDR ETF
-    each episode is compared against via ``SECTOR_ETFS``.
+    Walks each sleeve's ticker chronologically with the same average-cost
+    method as ``_cost_basis``. A position returning to ~zero shares closes its
+    episode; buying the ticker again starts a new one.
     """
-    bench_closes = bench_closes or {}
-    sectors = sectors or {}
     episodes: list[dict] = []
-    state: dict[str, dict] = {}
+    state: dict[tuple[str, str], dict] = {}
+
+    def fresh(account_id: str, ticker: str, open_date: dt.date) -> dict:
+        return {
+            "account_id": account_id,
+            "ticker": ticker,
+            "open_date": open_date.isoformat(),
+            "close_date": None,
+            "shares": 0.0,
+            "total_cost": 0.0,
+            "proceeds": 0.0,
+            "dividends": 0.0,
+        }
+
     for txn in ledger:
         if txn.ticker is None:
             continue
-        st = state.setdefault(
-            txn.ticker,
-            {"shares": 0.0, "cost": 0.0, "total_cost": 0.0, "proceeds": 0.0, "open_date": None},
-        )
+        key = (txn.account_id, txn.ticker)
+        ep = state.get(key)
         if txn.type == TransactionType.BUY:
-            if st["shares"] <= 1e-9:
-                st["open_date"] = txn.trade_date
-                st["cost"] = 0.0
-                st["total_cost"] = 0.0
-                st["proceeds"] = 0.0
-            buy_cost = (
+            if ep is None:
+                ep = state[key] = fresh(txn.account_id, txn.ticker, txn.trade_date)
+                episodes.append(ep)
+            ep["total_cost"] += (
                 -(txn.cash_flow)
                 if txn.cash_flow is not None
                 else (txn.shares or 0) * (txn.price or 0)
             )
-            st["cost"] += buy_cost
-            st["total_cost"] += buy_cost
-            st["shares"] += txn.shares or 0.0
-        elif txn.type == TransactionType.SELL:
-            if st["shares"] > 1e-9 and (txn.shares or 0) > 0:
-                sell_shares = min(txn.shares, st["shares"])
-                proceeds = (
-                    txn.cash_flow
-                    if txn.cash_flow is not None
-                    else sell_shares * (txn.price or 0)
-                )
-                avg = st["cost"] / st["shares"]
-                st["cost"] -= avg * sell_shares
-                st["shares"] -= sell_shares
-                st["proceeds"] += proceeds
-                if st["shares"] <= 1e-6 and st["open_date"] is not None and st["total_cost"] > 0:
-                    open_date = st["open_date"]
-                    close_date = txn.trade_date
-                    hold_days = (close_date - open_date).days
-                    gain_pct = st["proceeds"] / st["total_cost"] - 1.0
-                    cagr = (
-                        (1.0 + gain_pct) ** (365.0 / hold_days) - 1.0
-                        if hold_days > 0
-                        else None
-                    )
-                    spy_cagr = _bench_cagr(bench_closes.get("SPY"), open_date, close_date)
-                    qqq_cagr = _bench_cagr(bench_closes.get("QQQ"), open_date, close_date)
-                    sector = sectors.get(txn.ticker)
-                    sector_etf = SECTOR_ETFS.get(sector) if sector else None
-                    sector_cagr = (
-                        _bench_cagr(bench_closes.get(sector_etf), open_date, close_date)
-                        if sector_etf
-                        else None
-                    )
-                    episodes.append(
-                        {
-                            "ticker": txn.ticker,
-                            "open_date": open_date.isoformat(),
-                            "close_date": close_date.isoformat(),
-                            "hold_days": hold_days,
-                            "total_cost": round(st["total_cost"], 2),
-                            "total_proceeds": round(st["proceeds"], 2),
-                            "gain_dollar": round(st["proceeds"] - st["total_cost"], 2),
-                            "gain_pct": _round_or_none(gain_pct),
-                            "cagr": _round_or_none(cagr),
-                            "spy_cagr": _round_or_none(spy_cagr),
-                            "qqq_cagr": _round_or_none(qqq_cagr),
-                            "sector": sector,
-                            "sector_etf": sector_etf,
-                            "sector_etf_cagr": _round_or_none(sector_cagr),
-                            "cagr_excess_spy": _round_or_none(cagr - spy_cagr)
-                            if cagr is not None and spy_cagr is not None
-                            else None,
-                            "cagr_excess_qqq": _round_or_none(cagr - qqq_cagr)
-                            if cagr is not None and qqq_cagr is not None
-                            else None,
-                            "cagr_excess_sector": _round_or_none(cagr - sector_cagr)
-                            if cagr is not None and sector_cagr is not None
-                            else None,
-                        }
-                    )
-                    st["open_date"] = None
+            ep["shares"] += txn.shares or 0.0
+        elif ep is None:
+            continue
+        elif txn.type == TransactionType.SELL and (txn.shares or 0) > 0:
+            sold = min(txn.shares, ep["shares"])
+            ep["proceeds"] += (
+                txn.cash_flow if txn.cash_flow is not None else sold * (txn.price or 0)
+            )
+            ep["shares"] -= sold
+            if ep["shares"] <= 1e-6:
+                ep["shares"] = 0.0
+                ep["close_date"] = txn.trade_date.isoformat()
+                del state[key]
+        elif txn.type == TransactionType.DIVIDEND:
+            ep["dividends"] += txn.cash_flow or 0.0
         elif txn.type == TransactionType.SPLIT and txn.split_ratio:
-            st["shares"] *= txn.split_ratio
+            ep["shares"] *= txn.split_ratio
         elif txn.type == TransactionType.SYMBOL_CHANGE and txn.new_ticker:
-            state[txn.new_ticker] = state.pop(txn.ticker)
-    episodes.sort(key=lambda e: e["close_date"], reverse=True)
+            ep["ticker"] = txn.new_ticker
+            state[(txn.account_id, txn.new_ticker)] = state.pop(key)
     return episodes
+
+
+def _position_rows(
+    db: Session,
+    ledger: list[Transaction],
+    sectors: dict[str, str],
+    as_of: dt.date,
+) -> tuple[list[dict], dict[str, pd.DataFrame]]:
+    """Episodes with each one's return against SPY, QQQ and its sector ETF over
+    the identical window, plus the price frames they were measured on.
+
+    Position return includes dividends received, so it is compared like for
+    like with the benchmarks' adjusted total returns. An open position's window
+    ends at the latest close; a closed one's at the close on its sale date.
+    """
+    episodes = _walk_positions(ledger)
+    if not episodes:
+        return [], {}
+    start = min(dt.date.fromisoformat(e["open_date"]) for e in episodes)
+    tickers = ["SPY", "QQQ", *SECTOR_ETFS.values(), *(e["ticker"] for e in episodes)]
+    bars = _bench_bars(db, tickers, start, as_of)
+    raw_closes = close_matrix(
+        load_price_frame(db, sorted({e["ticker"] for e in episodes}), start, as_of),
+        "close",
+    )
+    names = {a.id: a.display_name for a in db.execute(select(Account)).scalars()}
+
+    rows = []
+    for ep in episodes:
+        open_date = dt.date.fromisoformat(ep["open_date"])
+        is_open = ep["close_date"] is None
+        end_date = as_of if is_open else dt.date.fromisoformat(ep["close_date"])
+        price = None
+        if is_open and ep["ticker"] in raw_closes.columns:
+            series = raw_closes[ep["ticker"]].dropna()
+            price = float(series.iloc[-1]) if len(series) else None
+        market_value = ep["shares"] * price if price is not None else None
+        hold_days = (end_date - open_date).days
+        cost = ep["total_cost"]
+        ending = ep["proceeds"] + (market_value or 0.0)
+        priced = cost > 0 and (not is_open or market_value is not None)
+        gain_pct = ending / cost - 1.0 if priced else None
+        total_return = (ending + ep["dividends"]) / cost - 1.0 if priced else None
+
+        sector = sectors.get(ep["ticker"])
+        sector_etf = SECTOR_ETFS.get(sector) if sector else None
+        spy = _window_return(bars.get("SPY"), open_date, end_date)
+        qqq = _window_return(bars.get("QQQ"), open_date, end_date)
+        etf = _window_return(bars.get(sector_etf), open_date, end_date) if sector_etf else None
+        cagr = _annualize(total_return, hold_days)
+
+        def diff(a: float | None, b: float | None) -> float | None:
+            return _round_or_none(a - b) if a is not None and b is not None else None
+
+        spy_cagr = _annualize(spy, hold_days)
+        qqq_cagr = _annualize(qqq, hold_days)
+        etf_cagr = _annualize(etf, hold_days)
+        rows.append(
+            {
+                "account_id": ep["account_id"],
+                "sleeve": names.get(ep["account_id"], ep["account_id"]),
+                "ticker": ep["ticker"],
+                "status": "open" if is_open else "closed",
+                "sector": sector,
+                "sector_etf": sector_etf,
+                "open_date": ep["open_date"],
+                "close_date": ep["close_date"],
+                "as_of": end_date.isoformat(),
+                "hold_days": hold_days,
+                "shares": round(ep["shares"], 6),
+                "price": _round_or_none(price, 4),
+                "market_value": _round_or_none(market_value, 2),
+                "total_cost": round(cost, 2),
+                "total_proceeds": round(ep["proceeds"], 2),
+                "dividends": round(ep["dividends"], 2),
+                "gain_dollar": _round_or_none(ending + ep["dividends"] - cost, 2)
+                if priced
+                else None,
+                "gain_pct": _round_or_none(gain_pct),
+                "total_return": _round_or_none(total_return),
+                "spy_return": _round_or_none(spy),
+                "qqq_return": _round_or_none(qqq),
+                "sector_etf_return": _round_or_none(etf),
+                "excess_spy": diff(total_return, spy),
+                "excess_qqq": diff(total_return, qqq),
+                "excess_sector": diff(total_return, etf),
+                "cagr": _round_or_none(cagr),
+                "spy_cagr": _round_or_none(spy_cagr),
+                "qqq_cagr": _round_or_none(qqq_cagr),
+                "sector_etf_cagr": _round_or_none(etf_cagr),
+                "cagr_excess_spy": diff(cagr, spy_cagr),
+                "cagr_excess_qqq": diff(cagr, qqq_cagr),
+                "cagr_excess_sector": diff(cagr, etf_cagr),
+            }
+        )
+    return rows, bars
 
 
 def history_payload(db: Session, account_key: str) -> dict:
@@ -1265,19 +1515,140 @@ def history_payload(db: Session, account_key: str) -> dict:
             )
         ).all()
     }
-    trade_dates = [t.trade_date for t in ledger if t.trade_date]
-    bench_closes = (
-        _bench_closes(
-            db, min(trade_dates), dt.date.today(), list(SECTOR_ETFS.values())
-        )
-        if trade_dates
-        else {}
-    )
+    rows, _ = _position_rows(db, ledger, sectors, dt.date.today())
     return {
         "account": account_key,
         "events": history_events(db, account_ids),
-        "closed_positions": _realized_trades(ledger, bench_closes, sectors),
+        "open_positions": sorted(
+            (r for r in rows if r["status"] == "open"),
+            key=lambda r: r["total_return"] if r["total_return"] is not None else -9.0,
+            reverse=True,
+        ),
+        "closed_positions": sorted(
+            (r for r in rows if r["status"] == "closed"),
+            key=lambda r: r["close_date"],
+            reverse=True,
+        ),
     }
+
+
+def _rebased_curve(
+    bars: pd.DataFrame | None, entry: float | None, calendar: pd.DatetimeIndex
+) -> dict:
+    """Cumulative return from ``entry`` on the calendar (0.05 = +5%)."""
+    if bars is None or entry is None or entry <= 0:
+        return {"dates": [], "values": []}
+    series = bars["adj_close"].reindex(calendar).ffill()
+    return _series_payload(series / entry - 1.0)
+
+
+def stocks_payload(ctx: AccountContext) -> dict:
+    """Each current holding against SPY, QQQ and its own sector ETF since entry.
+
+    ``attribution`` splits the holding-period return into what the market
+    delivered, what the sector added on top of the market, and what is left
+    for the stock itself — so a stock that rose only with its sector shows a
+    near-zero ``selection``.
+    """
+    s = get_settings()
+    sectors = ctx.sectors()
+    rows, bars = _position_rows(ctx.db, ctx.ledger, sectors, ctx.today)
+    rows = [r for r in rows if r["status"] == "open"]
+
+    universe = sorted(
+        {"SPY", *(r["ticker"] for r in rows), *(r["sector_etf"] for r in rows if r["sector_etf"])}
+    )
+    trailing, _ = _trailing_returns(ctx.db, universe, ctx.today)
+
+    def trailing_stat(fn, ticker: str, other: str | None):
+        if other is None or ticker not in trailing.columns or other not in trailing.columns:
+            return None
+        return _round_or_none(fn(trailing[ticker], trailing[other], s.min_obs_beta), 4)
+
+    stocks = []
+    for r in rows:
+        open_date = dt.date.fromisoformat(r["open_date"])
+        calendar = ctx.calendar[ctx.calendar >= pd.Timestamp(open_date)]
+        curves = {}
+        for label, symbol in (
+            ("stock", r["ticker"]),
+            ("SPY", "SPY"),
+            ("QQQ", "QQQ"),
+            ("sector_etf", r["sector_etf"]),
+        ):
+            b = bars.get(symbol) if symbol else None
+            entry = _entry_price(b, open_date) if b is not None else None
+            curves[label] = _rebased_curve(b, entry, calendar)
+        total, spy, etf = r["total_return"], r["spy_return"], r["sector_etf_return"]
+        stocks.append(
+            {
+                **r,
+                "curves": curves,
+                "attribution": {
+                    "market": spy,
+                    "sector": _round_or_none(etf - spy)
+                    if etf is not None and spy is not None
+                    else None,
+                    "selection": _round_or_none(total - etf)
+                    if total is not None and etf is not None
+                    else None,
+                },
+                "beta_spy": trailing_stat(risk.beta, r["ticker"], "SPY"),
+                "beta_sector": trailing_stat(risk.beta, r["ticker"], r["sector_etf"]),
+                "r_squared_spy": trailing_stat(risk.r_squared, r["ticker"], "SPY"),
+                "r_squared_sector": trailing_stat(
+                    risk.r_squared, r["ticker"], r["sector_etf"]
+                ),
+            }
+        )
+    stocks.sort(
+        key=lambda x: x["total_return"] if x["total_return"] is not None else -9.0,
+        reverse=True,
+    )
+    return {"account": ctx.key, "stocks": stocks}
+
+
+def sleeves_payload(db: Session) -> dict:
+    """All sleeves at a glance, funded or not, for the portfolio page and nav."""
+    sleeves = []
+    total_value = 0.0
+    for acct in _live_accounts(db):
+        base = {
+            "id": acct.id,
+            "name": acct.display_name,
+            "number": acct.sleeve_number,
+            "planned_start": acct.planned_start,
+            "capital": acct.starting_cash,
+            "start_date": acct.start_date.isoformat() if acct.start_date else None,
+        }
+        ctx = AccountContext(db, acct.id)
+        if not ctx.ledger or ctx.mv.empty:
+            sleeves.append({**base, "status": "pending", "tickers": []})
+            continue
+        summary = summary_payload(ctx)
+        total_value += summary["current_value"]
+        cum = perf.link_returns(ctx.returns) - 1.0
+        last = ctx.shares.iloc[-1]
+        sleeves.append(
+            {
+                **base,
+                "status": "active",
+                "tickers": sorted(last[last > 0].index),
+                "value": summary["current_value"],
+                "invested": summary["invested_capital"],
+                "cash": summary["cash"],
+                "today": summary["today"],
+                "total": summary["total"],
+                "twr": summary["twr"],
+                "cagr": summary["risk"]["cagr"],
+                "benchmarks": summary["benchmarks"],
+                "curve": _series_payload(cum),
+            }
+        )
+    for sleeve in sleeves:
+        if sleeve["status"] == "active" and total_value > 0:
+            sleeve["portfolio_weight"] = round(sleeve["value"] / total_value, 6)
+    return {"sleeves": sleeves, "total_value": round(total_value, 2)}
 
 
 def _active_provider_or_none() -> str | None:
@@ -1301,8 +1672,8 @@ def data_quality_payload(db: Session) -> dict:
     )
 
     # Missing prices per symbol on the SPY calendar
-    accounts = db.execute(select(Account)).scalars().all()
-    start = min(a.start_date for a in accounts) if accounts else None
+    accounts = _live_accounts(db)
+    start = min((a.start_date for a in accounts if a.start_date), default=None)
     issues: list[dict] = []
     if start:
         cal = trading_calendar(db, start, dt.date.today())
@@ -1327,7 +1698,15 @@ def data_quality_payload(db: Session) -> dict:
                 )
 
     # Duplicate transactions (same account/date/ticker/type/shares/price, different ids)
-    txns = db.execute(select(Transaction)).scalars().all()
+    txns = (
+        db.execute(
+            select(Transaction).where(
+                Transaction.account_id.in_([a.id for a in accounts])
+            )
+        )
+        .scalars()
+        .all()
+    )
     seen: dict[tuple, int] = {}
     for t in txns:
         k = (

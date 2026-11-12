@@ -2,10 +2,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import { AppStateProvider } from "./state/AppState";
-import Overview from "./pages/Overview";
+import PortfolioOverview from "./pages/PortfolioOverview";
+import SleeveLayout from "./pages/SleeveLayout";
+import SleeveOverview from "./pages/SleeveOverview";
+import SleeveStocks from "./pages/SleeveStocks";
 import Performance from "./pages/Performance";
 import Holdings from "./pages/Holdings";
-import Heatmap from "./pages/Heatmap";
+import Heatmaps from "./pages/Heatmaps";
 import Risk from "./pages/Risk";
 import Transactions from "./pages/Transactions";
 import History from "./pages/History";
@@ -25,13 +28,21 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route element={<Layout />}>
-              <Route index element={<Overview />} />
+              <Route index element={<PortfolioOverview />} />
               <Route path="performance" element={<Performance />} />
               <Route path="holdings" element={<Holdings />} />
-              <Route path="heatmap" element={<Heatmap />} />
+              <Route path="heatmap" element={<Heatmaps />} />
               <Route path="risk" element={<Risk />} />
               <Route path="transactions" element={<Transactions />} />
               <Route path="history" element={<History />} />
+              <Route path="sleeves/:sleeve" element={<SleeveLayout />}>
+                <Route index element={<SleeveOverview />} />
+                <Route path="stocks" element={<SleeveStocks />} />
+                <Route path="performance" element={<Performance />} />
+                <Route path="risk" element={<Risk />} />
+                <Route path="history" element={<History />} />
+                <Route path="transactions" element={<Transactions />} />
+              </Route>
               <Route path="data-quality" element={<DataQuality />} />
               <Route path="methodology" element={<Methodology />} />
             </Route>

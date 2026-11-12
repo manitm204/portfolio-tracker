@@ -21,18 +21,19 @@ from .conftest import D0, D2, add_bars, buy, deposit, make_account
 from .test_bootstrap_and_io import FakeFMP
 
 
-def test_earliest_needed_date_covers_trailing_year_even_for_new_account(db):
-    make_account(db, "ACC", start=ny_today() - dt.timedelta(days=5))
+def test_earliest_needed_date_covers_year_before_a_new_accounts_purchase(db):
+    start = ny_today() - dt.timedelta(days=5)
+    make_account(db, "ACC", start=start)
     db.commit()
-    expected = ny_today() - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
+    expected = start - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
     assert earliest_needed_date(db) == expected
 
 
-def test_earliest_needed_date_uses_account_start_when_older(db):
-    old_start = ny_today() - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS + 100)
-    make_account(db, "ACC", start=old_start)
+def test_earliest_needed_date_ignores_accounts_without_a_start(db):
+    make_account(db, "ACC", start=None)
     db.commit()
-    assert earliest_needed_date(db) == old_start
+    expected = ny_today() - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
+    assert earliest_needed_date(db) == expected
 
 
 def test_refresh_is_idempotent(db):

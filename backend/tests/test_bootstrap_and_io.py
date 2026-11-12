@@ -1,4 +1,4 @@
-"""Acceptance tests: seed hydration, $500 reconciliation, CSV io."""
+"""Acceptance tests: seed hydration, sleeve capital reconciliation, CSV io."""
 
 from __future__ import annotations
 
@@ -61,27 +61,39 @@ def seeded(db):
     return db
 
 
-def test_seed_book_loads_all_targets(seeded):
-    from app.models import ModelTarget
+def test_seed_book_loads_all_sleeves(seeded):
+    from app.models import Account, ModelTarget
 
     db = seeded
-    t5 = (
-        db.execute(select(ModelTarget).where(ModelTarget.account_id == "PORTFOLIO_5"))
-        .scalars()
-        .all()
-    )
-    assert len(t5) == 5
+    sleeves = db.execute(select(Account).order_by(Account.sleeve_number)).scalars().all()
+    assert [a.id for a in sleeves] == ["SLEEVE_1", "SLEEVE_2", "SLEEVE_3", "SLEEVE_4"]
+    assert len({a.starting_cash for a in sleeves}) == 1  # equal money per sleeve
+    assert sleeves[0].start_date == dt.date(2026, 10, 1)
+    assert sleeves[1].start_date == dt.date(2026, 11, 2)
+    assert sleeves[2].start_date is None and sleeves[3].start_date is None
+    counts = [
+        len(
+            db.execute(select(ModelTarget).where(ModelTarget.account_id == a.id))
+            .scalars()
+            .all()
+        )
+        for a in sleeves
+    ]
+    assert counts == [6, 5, 0, 0]
 
 
-def test_five_stock_hydration_reconciles_to_500(seeded):
+def test_sleeve_hydration_reconciles_to_capital(seeded):
+    from app.models import Account
+
     db = seeded
     fake = FakeFMP(open_price=250.0)
-    result = hydrate_account(db, "PORTFOLIO_5", client=fake)
+    capital = db.get(Account, "SLEEVE_2").starting_cash
+    result = hydrate_account(db, "SLEEVE_2", client=fake)
     assert result.hydrated and result.fills == 5
     txns = (
         db.execute(
             select(Transaction).where(
-                Transaction.account_id == "PORTFOLIO_5",
+                Transaction.account_id == "SLEEVE_2",
                 Transaction.type == TransactionType.BUY,
             )
         )
@@ -89,19 +101,29 @@ def test_five_stock_hydration_reconciles_to_500(seeded):
         .all()
     )
     total = sum(-t.cash_flow for t in txns)
-    assert total == pytest.approx(500.0, abs=1e-9)
+    assert total == pytest.approx(capital, abs=1e-9)
     for t in txns:
-        assert t.shares == pytest.approx(100.0 / 250.0, rel=1e-9)  # full precision kept
-        assert -t.cash_flow == pytest.approx(100.0, abs=1e-12)
+        assert t.shares == pytest.approx(capital / 5 / 250.0, rel=1e-9)  # full precision kept
+        assert t.trade_date == dt.date(2026, 11, 2)
     assert result.residual_cash == pytest.approx(0.0, abs=1e-9)
+
+
+def test_reloading_seed_keeps_a_sleeve_funded_in_the_app(seeded):
+    from app.models import Account
+
+    db = seeded
+    db.get(Account, "SLEEVE_3").start_date = dt.date(2026, 12, 1)
+    db.commit()
+    load_seed_book(db)
+    assert db.get(Account, "SLEEVE_3").start_date == dt.date(2026, 12, 1)
 
 
 def test_hydration_is_idempotent(seeded):
     db = seeded
     fake = FakeFMP()
-    r1 = hydrate_account(db, "PORTFOLIO_5", client=fake)
+    r1 = hydrate_account(db, "SLEEVE_1", client=fake)
     n1 = len(db.execute(select(Transaction)).scalars().all())
-    r2 = hydrate_account(db, "PORTFOLIO_5", client=fake)
+    r2 = hydrate_account(db, "SLEEVE_1", client=fake)
     n2 = len(db.execute(select(Transaction)).scalars().all())
     assert r1.hydrated and r2.already_done
     assert n1 == n2
@@ -112,13 +134,13 @@ def test_hydration_all_or_nothing_on_missing_open(seeded):
 
     class PartialFMP(FakeFMP):
         def historical_eod(self, symbol, start, end):
-            if symbol == "IBKR":
+            if symbol == "VLO":
                 return []  # missing data for one symbol
             return super().historical_eod(symbol, start, end)
 
-    result = hydrate_account(db, "PORTFOLIO_5", client=PartialFMP())
+    result = hydrate_account(db, "SLEEVE_1", client=PartialFMP())
     assert not result.hydrated
-    assert any("IBKR" in e for e in result.errors)
+    assert any("VLO" in e for e in result.errors)
     assert (
         db.execute(select(Transaction)).scalars().first() is None
     )  # nothing committed

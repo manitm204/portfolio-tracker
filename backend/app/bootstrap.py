@@ -1,7 +1,7 @@
 """One-time seed hydration.
 
-Loads the seed book (accounts + model targets) from ``data/*.csv`` and, once
-per account, fetches the official opening price for each purchase date from
+Loads the seed book (sleeves + their holdings) from ``data/*.csv`` and, once
+per funded sleeve, fetches the official opening price for each purchase date from
 the market-data provider, materializes canonical BUY transactions and
 immutable OfficialFill rows.
 
@@ -48,7 +48,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 # ---------------------------------------------------------------------------
 def load_seed_book(db: Session, data_dir: Path = DATA_DIR) -> None:
     _load_accounts(db, data_dir / "accounts.csv")
-    _load_targets_5(db, data_dir / "portfolio_5_seed.csv")
+    _load_targets(db, data_dir / "sleeve_holdings.csv")
     db.commit()
 
 
@@ -60,13 +60,18 @@ def _load_accounts(db: Session, path: Path) -> None:
                 acct = Account(id=row["account_id"])
                 db.add(acct)
             acct.display_name = row["display_name"]
-            acct.start_date = dt.date.fromisoformat(row["start_date"])
+            acct.sleeve_number = int(row["sleeve_number"])
+            acct.planned_start = row["planned_start"] or None
+            # A blank CSV date must not un-fund a sleeve populated in the app.
+            if row["start_date"]:
+                acct.start_date = dt.date.fromisoformat(row["start_date"])
             acct.starting_cash = float(row["starting_cash"])
             acct.benchmark_1 = row["benchmark_1"]
             acct.benchmark_2 = row["benchmark_2"]
+    db.flush()
 
 
-def _upsert_target(db: Session, account_id: str, ticker: str, **fields) -> None:
+def upsert_target(db: Session, account_id: str, ticker: str, **fields) -> None:
     existing = db.execute(
         select(ModelTarget).where(
             ModelTarget.account_id == account_id, ModelTarget.ticker == ticker
@@ -79,20 +84,34 @@ def _upsert_target(db: Session, account_id: str, ticker: str, **fields) -> None:
             setattr(existing, k, v)
 
 
-def _load_targets_5(db: Session, path: Path) -> None:
+def equal_weight_targets(
+    db: Session, account: Account, holdings: list[tuple[str, str]]
+) -> None:
+    """Split the sleeve's capital equally across ``(ticker, sector)`` holdings."""
+    for ticker, sector in holdings:
+        upsert_target(
+            db,
+            account.id,
+            ticker,
+            sector=sector,
+            composite_score=None,
+            target_weight_pct=100.0 / len(holdings),
+            target_dollars=account.starting_cash / len(holdings),
+            active=True,
+        )
+
+
+def _load_targets(db: Session, path: Path) -> None:
+    by_account: dict[str, list[tuple[str, str]]] = {}
     with path.open() as f:
         for row in csv.DictReader(f):
-            dollars = float(row["investment_dollars"])
-            _upsert_target(
-                db,
-                row["account_id"],
-                row["ticker"],
-                sector=row["sector"],
-                composite_score=None,
-                target_weight_pct=20.0,
-                target_dollars=dollars,
-                active=row["active"].strip().lower() == "true",
+            by_account.setdefault(row["account_id"], []).append(
+                (row["ticker"], row["sector"])
             )
+    for account_id, holdings in by_account.items():
+        # A hydrated sleeve's targets now track its live positions, not the seed.
+        if db.get(BootstrapState, account_id) is None:
+            equal_weight_targets(db, db.get(Account, account_id), holdings)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +139,8 @@ def hydrate_account(
     account = db.get(Account, account_id)
     if account is None:
         raise ValueError(f"Unknown account {account_id}")
+    if account.start_date is None:
+        raise ValueError(f"{account_id} has no start date yet")
 
     targets = (
         db.execute(
@@ -265,7 +286,15 @@ def _upsert_price_bar(db: Session, ticker: str, date: dt.date, bar: dict) -> Non
 
 def hydrate_all(db: Session, client: MarketDataClient | None = None) -> list[HydrationResult]:
     load_seed_book(db)
-    account_ids = db.execute(select(Account.id)).scalars().all()
+    account_ids = (
+        db.execute(
+            select(Account.id).where(
+                Account.archived.is_(False), Account.start_date.isnot(None)
+            )
+        )
+        .scalars()
+        .all()
+    )
     own = client is None
     client = client or get_market_data_client()
     try:

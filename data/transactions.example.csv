@@ -1,2 +1,2 @@
 transaction_id,account_id,trade_date,ticker,transaction_type,shares,price,fees,cash_flow,source,notes
-example-1,PORTFOLIO_5,2026-07-29,GOOGL,BUY,,,0,-100,FMP_OFFICIAL_OPEN,Shares equal 100 divided by opening price
+example-1,SLEEVE_1,2026-11-04,KO,BUY,1.25,80,0,-100,USER,Shares times price equals the cash flow

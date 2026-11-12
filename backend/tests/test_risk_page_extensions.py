@@ -42,7 +42,7 @@ def test_factor_exposure_present_for_all_five_etfs(db, market_data):
     db.commit()
 
     ctx = AccountContext(db, "ACC")
-    payload = risk_payload(ctx)
+    payload = risk_payload(ctx, "trailing")
 
     tickers = {row["ticker"] for row in payload["factor_exposure"]}
     assert tickers == {"MTUM", "VLUE", "QUAL", "USMV", "SIZE"}
@@ -63,7 +63,7 @@ def test_correlation_matrix_and_diversification_for_multi_holding_book(db, marke
     db.commit()
 
     ctx = AccountContext(db, "ACC")
-    payload = risk_payload(ctx)
+    payload = risk_payload(ctx, "trailing")
 
     cm = payload["correlation_matrix"]
     assert cm is not None

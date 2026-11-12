@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { api, Holding } from "../api/client";
-import { useAppState } from "../state/AppState";
+import { PORTFOLIO, useAccountId } from "../state/AppState";
 import Chart, { SERIES, divergingScale, sectorTreemap } from "../components/Chart";
 import { EmptyState, ErrorState, SectionTitle, Skeleton } from "../components/Primitives";
 import { fmtMoney, fmtNum, fmtPct, fmtSignedPct, signClass } from "../lib/format";
@@ -12,7 +12,7 @@ type SortKey = keyof Holding;
 const COLS: { key: SortKey; label: string; title?: string }[] = [
   { key: "ticker", label: "Ticker" },
   { key: "sector", label: "Sector" },
-  { key: "composite_score", label: "Score", title: "Original model composite score (seed metadata, not market data)" },
+  { key: "sleeves", label: "Sleeve" },
   { key: "shares", label: "Shares" },
   { key: "avg_cost", label: "Avg cost" },
   { key: "price", label: "Price" },
@@ -26,7 +26,7 @@ const COLS: { key: SortKey; label: string; title?: string }[] = [
 ];
 
 export default function Holdings() {
-  const { accountId } = useAppState();
+  const accountId = useAccountId();
   const holdings = useQuery({ queryKey: ["holdings", accountId], queryFn: () => api.holdings(accountId) });
   const allocation = useQuery({ queryKey: ["allocation", accountId], queryFn: () => api.allocation(accountId) });
   const [search, setSearch] = useState("");
@@ -67,7 +67,6 @@ export default function Holdings() {
         />
         <div className="text-xs text-[var(--text-muted)]">
           {rows.length} of {data.holdings.length} holdings
-          {data.inactive.length > 0 && ` · ${data.inactive.length} inactive candidate (excluded from all statistics)`}
         </div>
       </div>
 
@@ -99,7 +98,7 @@ export default function Holdings() {
                   {h.price_stale && <span className="ml-1 text-[10px] text-[#c98500]" title={`Price forward-filled; last trade ${h.price_as_of ?? "unknown"}`}>stale</span>}
                 </td>
                 <td className="whitespace-nowrap p-2 text-[var(--text-secondary)]">{h.sector}</td>
-                <td className="p-2 text-right tabular">{h.composite_score ?? "—"}</td>
+                <td className="whitespace-nowrap p-2 text-right text-[var(--text-secondary)]">{h.sleeves.join(", ")}</td>
                 <td className="p-2 text-right tabular">{fmtNum(h.shares, h.shares < 10 ? 6 : 2)}</td>
                 <td className="p-2 text-right tabular">{fmtMoney(h.avg_cost)}</td>
                 <td className="p-2 text-right tabular">{fmtMoney(h.price)}</td>
@@ -184,10 +183,12 @@ export default function Holdings() {
           </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div className="card p-3">
-              <SectionTitle hint="Original model target weight vs today's actual weight; bars show the drift.">Target vs current drift</SectionTitle>
-              <DriftChart drift={a.drift} />
-            </div>
+            {accountId !== PORTFOLIO && (
+              <div className="card p-3">
+                <SectionTitle hint="Equal-weight target at purchase vs today's actual weight; bars show the drift.">Target vs current drift</SectionTitle>
+                <DriftChart drift={a.drift} />
+              </div>
+            )}
             <div className="card p-3">
               <SectionTitle hint="weight_(t−1) × daily return, an arithmetic attribution. Cumulative = sum of daily contributions since inception (approximation of the geometric link), restricted to positions still held today — a fully closed-out position no longer appears, even though it contributed while held.">
                 Return contribution

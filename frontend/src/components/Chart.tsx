@@ -10,6 +10,9 @@ export const SERIES = {
   portfolio: () => cssVar("--series-portfolio"),
   spy: () => cssVar("--series-spy"),
   qqq: () => cssVar("--series-qqq"),
+  sector: () => cssVar("--series-sector"),
+  sleeve: (n: number) => cssVar(`--sleeve-${n}`),
+  surface: () => cssVar("--surface-1"),
   pos: () => cssVar("--pos"),
   neg: () => cssVar("--neg"),
   neutral: () => cssVar("--neutral-mid"),
@@ -120,7 +123,8 @@ export default function Chart({
     if (xs && xs.length > 0 && typeof xs[0] === "string" && /^\d{4}-\d{2}-\d{2}/.test(xs[0] as string)) {
       const spanDays =
         (new Date(String(xs[xs.length - 1])).getTime() - new Date(String(xs[0])).getTime()) / 86_400_000;
-      if (spanDays <= 45) dateTicks = { dtick: 86_400_000, tickformat: "%b %d" };
+      if (spanDays <= 14) dateTicks = { dtick: 86_400_000, tickformat: "%b %d" };
+      else if (spanDays <= 120) dateTicks = { nticks: 8, tickformat: "%b %d", tickangle: 0 };
     }
     return {
       ...base,

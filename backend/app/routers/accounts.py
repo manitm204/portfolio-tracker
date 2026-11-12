@@ -64,8 +64,17 @@ def allocation(account_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{account_id}/risk")
-def risk(account_id: str, db: Session = Depends(get_db)):
-    return services.risk_payload(_ctx(db, account_id))
+def risk(
+    account_id: str,
+    window: str = Query("purchase", pattern="^(purchase|trailing)$"),
+    db: Session = Depends(get_db),
+):
+    return services.risk_payload(_ctx(db, account_id), window)
+
+
+@router.get("/{account_id}/stocks")
+def stocks(account_id: str, db: Session = Depends(get_db)):
+    return services.stocks_payload(_ctx(db, account_id))
 
 
 @router.get("/{account_id}/monte-carlo")
@@ -138,8 +147,3 @@ async def import_transactions(
         return csv_io.import_transactions(db, content, default_account=default)
     except csv_io.ImportError_ as err:
         raise HTTPException(422, str(err))
-
-
-@router.get("/combined/contributions")
-def combined_contributions(db: Session = Depends(get_db)):
-    return {"accounts": services.account_contributions(db)}

@@ -1,8 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
 
 interface AppState {
-  accountId: string;
-  setAccountId: (id: string) => void;
   dark: boolean;
   toggleTheme: () => void;
   range: string; // SI | YTD | 1M | 3M | 6M | 1Y | custom
@@ -15,17 +14,10 @@ interface AppState {
 const Ctx = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
-  const [accountId, setAccountId] = useState(
-    () => localStorage.getItem("accountId") ?? "PORTFOLIO_5",
-  );
   const [dark, setDark] = useState(() => localStorage.getItem("theme") !== "light");
   const [range, setRange] = useState("SI");
   const [customStart, setCustomStart] = useState<string | null>(null);
   const [customEnd, setCustomEnd] = useState<string | null>(null);
-
-  useEffect(() => {
-    localStorage.setItem("accountId", accountId);
-  }, [accountId]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -40,8 +32,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(
     () => ({
-      accountId,
-      setAccountId,
       dark,
       toggleTheme,
       range,
@@ -50,7 +40,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       customEnd,
       setCustom,
     }),
-    [accountId, dark, range, customStart, customEnd, toggleTheme, setCustom],
+    [dark, range, customStart, customEnd, toggleTheme, setCustom],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -59,6 +49,14 @@ export function useAppState(): AppState {
   const v = useContext(Ctx);
   if (!v) throw new Error("useAppState outside provider");
   return v;
+}
+
+export const PORTFOLIO = "combined";
+
+/** The account a page shows: the sleeve in the URL, else the whole portfolio. */
+export function useAccountId(): string {
+  const { sleeve } = useParams();
+  return sleeve ? `SLEEVE_${sleeve}` : PORTFOLIO;
 }
 
 /** Translate the selected range into a start date (ISO) or undefined for SI. */

@@ -19,9 +19,11 @@ import logging
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from .analytics.performance import price_period_return
 from .market_data import (
     MarketDataClient,
     MarketDataError,
@@ -41,6 +43,7 @@ from .models import (
     TransactionType,
     utcnow,
 )
+from .spy_holdings import fetch_spy_holdings
 
 # FMP's sp500-constituent "sector" field uses its own (Morningstar-style)
 # taxonomy, not GICS; the Yahoo provider's Wikipedia list is already GICS.
@@ -110,12 +113,19 @@ SECTOR_ETFS: dict[str, str] = {
     "Materials": "XLB",
 }
 
-# Every tracked symbol keeps at least this much trailing history, regardless
-# of account age, so trailing-window risk stats (security beta, factor
-# exposure, correlation matrix, PCA — see services._trailing_returns) never
-# depend on how long a position has actually been held. A stock bought 5 days
-# ago still has ~a year of its own real price history fetched and cached.
+# Every tracked symbol keeps at least this much history before both today and
+# the earliest sleeve start, so risk stats (security beta, factor exposure,
+# correlation matrix, PCA — see services._trailing_returns) never depend on how
+# long a position has actually been held, and the year BEFORE each purchase
+# stays available as the sleeve ages.
 TRAILING_LOOKBACK_CALENDAR_DAYS = 400
+
+# A cached series ending within this many days of today counts as current, so
+# weekends and market holidays don't force a refetch.
+COVERAGE_SLACK_DAYS = 5
+
+# Periods stored per S&P 500 constituent for the index heatmap.
+INDEX_PERIODS = ("1D", "1W", "1M", "MTD", "3M", "YTD", "1Y")
 
 
 def ny_today() -> dt.date:
@@ -127,18 +137,29 @@ def is_intraday_now() -> bool:
     return now.time() < MARKET_CLOSE
 
 
+def live_account_ids(db: Session) -> list[str]:
+    return list(
+        db.execute(select(Account.id).where(Account.archived.is_(False))).scalars()
+    )
+
+
 def symbol_universe(db: Session) -> list[str]:
     """Every symbol we must track: transacted tickers, active targets, benchmarks, factor ETFs, sector ETFs."""
     tickers: set[str] = set(FACTOR_ETFS) | set(SECTOR_ETFS.values())
+    account_ids = live_account_ids(db)
     for (t,) in db.execute(
-        select(Transaction.ticker).where(Transaction.ticker.isnot(None)).distinct()
+        select(Transaction.ticker)
+        .where(Transaction.ticker.isnot(None), Transaction.account_id.in_(account_ids))
+        .distinct()
     ):
         tickers.add(t)
     for (t,) in db.execute(
-        select(ModelTarget.ticker).where(ModelTarget.active.is_(True)).distinct()
+        select(ModelTarget.ticker)
+        .where(ModelTarget.active.is_(True), ModelTarget.account_id.in_(account_ids))
+        .distinct()
     ):
         tickers.add(t)
-    for acct in db.execute(select(Account)).scalars():
+    for acct in db.execute(select(Account).where(Account.archived.is_(False))).scalars():
         tickers.add(acct.benchmark_1)
         tickers.add(acct.benchmark_2)
     return sorted(tickers)
@@ -146,10 +167,13 @@ def symbol_universe(db: Session) -> list[str]:
 
 def earliest_needed_date(db: Session) -> dt.date:
     today = ny_today()
-    trailing_floor = today - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
-    dates = db.execute(select(Account.start_date)).scalars().all()
-    account_floor = min(dates) if dates else today
-    return min(account_floor, trailing_floor)
+    dates = db.execute(
+        select(Account.start_date).where(
+            Account.archived.is_(False), Account.start_date.isnot(None)
+        )
+    ).scalars().all()
+    first_start = min(dates, default=today)
+    return min(first_start, today) - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
 
 
 @dataclass
@@ -246,6 +270,7 @@ def _transacted_tickers(db: Session) -> list[str]:
             select(Transaction.ticker)
             .where(
                 Transaction.ticker.isnot(None),
+                Transaction.account_id.in_(live_account_ids(db)),
                 Transaction.type.in_([TransactionType.BUY, TransactionType.SELL]),
             )
             .distinct()
@@ -358,7 +383,7 @@ def ensure_adjusted_history(
     that failed to fetch (caller decides whether that's fatal).
     """
     failed: list[str] = []
-    missing = [s for s in symbols if not _adjusted_covers(db, s, start)]
+    missing = [s for s in symbols if not _adjusted_covers(db, s, start, end)]
     prefetch(client, missing, start, end)
     for symbol in missing:
         try:
@@ -373,17 +398,23 @@ def ensure_adjusted_history(
     return failed
 
 
-def _adjusted_covers(db: Session, symbol: str, start: dt.date) -> bool:
+def _adjusted_covers(db: Session, symbol: str, start: dt.date, end: dt.date) -> bool:
     # Must check the EARLIEST cached bar, not just "any bar near start":
     # a ticker fetched for a different (later) account inception window
     # can have real data starting after ``start``, which would otherwise
-    # look "covered" and silently leave an early-date gap.
-    earliest = db.execute(
-        select(func.min(PriceBar.date)).where(
+    # look "covered" and silently leave an early-date gap. The LATEST bar
+    # matters the same way: these symbols aren't refreshed daily, so a cache
+    # ending before a sleeve's start would fail every simulation using it.
+    earliest, latest = db.execute(
+        select(func.min(PriceBar.date), func.max(PriceBar.date)).where(
             PriceBar.ticker == symbol, PriceBar.adj_close.isnot(None)
         )
-    ).scalar()
-    return earliest is not None and earliest <= start + dt.timedelta(days=1)
+    ).one()
+    return (
+        earliest is not None
+        and earliest <= start + dt.timedelta(days=1)
+        and latest >= end - dt.timedelta(days=COVERAGE_SLACK_DAYS)
+    )
 
 
 def ensure_sp500_constituents(
@@ -410,19 +441,27 @@ def ensure_sp500_constituents(
     )
     if stale:
         rows = client.index_constituents("sp500")
-        by_symbol = {r["symbol"]: r for r in rows if r.get("symbol")}
+        # One spelling for share classes (BRK-B), whatever the source uses.
+        by_symbol = {
+            r["symbol"].replace(".", "-"): r for r in rows if r.get("symbol")
+        }
         if by_symbol:
+            # Update in place: rows also carry the heatmap snapshot.
             db.execute(
-                delete(IndexConstituent).where(IndexConstituent.index_name == "sp500")
+                delete(IndexConstituent).where(
+                    IndexConstituent.index_name == "sp500",
+                    IndexConstituent.ticker.notin_(list(by_symbol)),
+                )
             )
+            existing = _index_rows(db)
             now = utcnow()
             for sym, r in sorted(by_symbol.items()):
-                sector = SECTOR_MAP.get(r.get("sector", ""))
-                db.add(
-                    IndexConstituent(
-                        index_name="sp500", ticker=sym, sector=sector, fetched_at=now
-                    )
-                )
+                row = existing.get(sym)
+                if row is None:
+                    row = IndexConstituent(index_name="sp500", ticker=sym)
+                    db.add(row)
+                row.sector = SECTOR_MAP.get(r.get("sector", ""))
+                row.fetched_at = now
             db.commit()
     return sorted(
         t
@@ -432,6 +471,83 @@ def ensure_sp500_constituents(
             .distinct()
         )
     )
+
+
+def _index_rows(db: Session) -> dict[str, IndexConstituent]:
+    return {
+        r.ticker: r
+        for r in db.execute(
+            select(IndexConstituent).where(IndexConstituent.index_name == "sp500")
+        ).scalars()
+    }
+
+
+def refresh_index_snapshot(db: Session, client: MarketDataClient) -> dict:
+    """Refresh the S&P 500 heatmap: fund weights plus per-period returns.
+
+    Stores a few numbers per constituent rather than ~500 full price
+    histories. Weight and sector failures keep the last good values; the
+    heatmap reports the snapshot's as-of date so staleness stays visible.
+    """
+    try:
+        ensure_sp500_constituents(db, client)
+    except MarketDataError as err:
+        db.rollback()
+        log.warning("S&P 500 sector refresh failed: %s", err)
+
+    rows = _index_rows(db)
+    weights_ok = True
+    try:
+        holdings = fetch_spy_holdings()
+    except MarketDataError as err:
+        log.warning("SPY holdings fetch failed: %s", err)
+        weights_ok = False
+    else:
+        held = {h["ticker"] for h in holdings}
+        for ticker, row in rows.items():
+            if ticker not in held:
+                row.weight = None
+        for h in holdings:
+            row = rows.get(h["ticker"])
+            if row is None:
+                row = IndexConstituent(
+                    index_name="sp500", ticker=h["ticker"], sector="Unknown"
+                )
+                db.add(row)
+                rows[h["ticker"]] = row
+            row.name = h["name"]
+            row.weight = h["weight"]
+        db.commit()
+
+    tickers = sorted(t for t, r in rows.items() if r.weight is not None) or sorted(rows)
+    today = ny_today()
+    start = today - dt.timedelta(days=TRAILING_LOOKBACK_CALENDAR_DAYS)
+    prefetch(client, tickers, start, today)
+    updated = 0
+    failed: list[str] = []
+    for ticker in tickers:
+        try:
+            bars = client.historical_eod_adjusted(ticker, start, today)
+        except MarketDataError:
+            failed.append(ticker)
+            continue
+        closes = pd.Series(
+            {pd.Timestamp(b["date"]): b.get("adjClose") for b in bars}, dtype=float
+        ).sort_index().dropna()
+        if len(closes) < 2:
+            failed.append(ticker)
+            continue
+        rows[ticker].period_returns = json.dumps(
+            {
+                p: price_period_return(closes, p, closes.index[-1])
+                for p in INDEX_PERIODS
+            }
+        )
+        rows[ticker].returns_as_of = closes.index[-1].date()
+        updated += 1
+    db.commit()
+    log.info("Index snapshot: %d updated, %d failed", updated, len(failed))
+    return {"updated": updated, "failed": failed, "weights_ok": weights_ok}
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +590,7 @@ def _sync_corporate_actions(
 ) -> tuple[int, int]:
     """Materialize SPLIT then DIVIDEND ledger rows for every account holding
     the symbol. Returns (splits_created, dividends_created)."""
-    account_ids = [a for (a,) in db.execute(select(Account.id))]
+    account_ids = live_account_ids(db)
     splits_created = dividends_created = 0
     source = f"{provider_name(client).upper()}_CORPORATE_ACTIONS"
 

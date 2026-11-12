@@ -41,7 +41,9 @@ export function fmtDate(iso: string | null | undefined): string {
 
 export function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("en-US", {
+  // The API sends UTC; SQLite drops the offset, which would otherwise read as local time.
+  const utc = /(Z|[+-]\d{2}:\d{2})$/.test(iso) ? iso : `${iso}Z`;
+  return new Date(utc).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",

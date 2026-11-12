@@ -3,9 +3,37 @@
 export interface AccountInfo {
   id: string;
   display_name: string;
-  start_date: string;
+  sleeve_number: number | null;
+  start_date: string | null;
+  planned_start: string | null;
   starting_cash: number;
   benchmarks: string[];
+}
+
+export interface Sleeve {
+  id: string;
+  name: string;
+  number: number;
+  status: "active" | "pending";
+  planned_start: string | null;
+  capital: number;
+  start_date: string | null;
+  tickers: string[];
+  value?: number;
+  invested?: number;
+  cash?: number;
+  today?: { dollar: number | null; pct: number | null };
+  total?: { dollar: number; pct: number | null };
+  twr?: number | null;
+  cagr?: number | null;
+  benchmarks?: Record<string, { twr: number | null; excess: number | null; value: number | null }>;
+  curve?: Series;
+  portfolio_weight?: number;
+}
+
+export interface SleevesResponse {
+  sleeves: Sleeve[];
+  total_value: number;
 }
 
 export interface Freshness {
@@ -81,7 +109,7 @@ export interface Performance {
 export interface Holding {
   ticker: string;
   sector: string;
-  composite_score: number | null;
+  sleeves: string[];
   shares: number;
   cost_basis: number | null;
   avg_cost: number | null;
@@ -103,7 +131,6 @@ export interface Holding {
 export interface HoldingsResponse {
   account: string;
   holdings: Holding[];
-  inactive: { ticker: string; sector: string; composite_score: number | null; note: string }[];
 }
 
 export interface Allocation {
@@ -159,6 +186,30 @@ export interface DiversificationInfo {
   pc1_loadings: { ticker: string; loading: number }[];
 }
 
+export interface HistoricalProfile {
+  observations: number;
+  total_return: number | null;
+  spy_total_return: number | null;
+  beta_spy: number | null;
+  beta_qqq: number | null;
+  correlation_spy: number | null;
+  correlation_qqq: number | null;
+  volatility: number | null;
+  spy_volatility: number | null;
+  sharpe: number | null;
+  sortino: number | null;
+  max_drawdown: number | null;
+  spy_max_drawdown: number | null;
+  var_95: number | null;
+  cvar_95: number | null;
+  var_99: number | null;
+  cvar_99: number | null;
+  average_correlation: number | null;
+  diversification_ratio: number | null;
+}
+
+export type RiskWindow = "purchase" | "trailing";
+
 export interface RiskResponse {
   account: string;
   observations: number;
@@ -185,14 +236,33 @@ export interface RiskResponse {
   factor_exposure: FactorExposureRow[];
   correlation_matrix: CorrelationMatrix | null;
   diversification: DiversificationInfo | null;
-  trailing_window: { target_trading_days: number; observations: number };
+  historical: HistoricalProfile | null;
+  sector_vs_index: { sector: string; weight: number; index_weight: number | null; etf_ticker: string | null }[];
+  trailing_window: {
+    mode: RiskWindow;
+    anchor_date: string | null;
+    start: string | null;
+    end: string | null;
+    target_trading_days: number;
+    observations: number;
+  };
+}
+
+export interface HeatmapTile {
+  ticker: string;
+  sector: string;
+  sleeves: string[];
+  weight: number;
+  value: number;
+  return: number | null;
+  returns: Record<string, number | null>;
 }
 
 export interface HeatmapResponse {
   account: string;
   period: string;
   periods: string[];
-  tiles: { ticker: string; sector: string; weight: number; value: number; return: number | null }[];
+  tiles: HeatmapTile[];
   sectors: {
     sector: string;
     weight: number;
@@ -201,6 +271,16 @@ export interface HeatmapResponse {
     etf_return: number | null;
     excess_return: number | null;
   }[];
+  benchmarks?: Record<string, Record<string, number | null>>;
+}
+
+export interface MarketHeatmap {
+  period: string;
+  periods: string[];
+  as_of: string | null;
+  unpriced: string[];
+  tiles: { ticker: string; name: string | null; sector: string; weight: number; return: number | null }[];
+  sectors: { sector: string; weight: number; return: number; etf_ticker: string | null }[];
 }
 
 export interface Txn {
@@ -269,6 +349,7 @@ export interface RefreshResult {
   failures: string[];
   dividends_created: number;
   splits_created: number;
+  index_symbols: number;
 }
 
 export interface HistoryHoldingRow {
@@ -295,20 +376,35 @@ export interface HistoryEvent {
   after: HistorySnapshot;
 }
 
-export interface ClosedPosition {
+export interface Position {
+  account_id: string;
+  sleeve: string;
   ticker: string;
+  status: "open" | "closed";
+  sector: string | null;
+  sector_etf: string | null;
   open_date: string;
-  close_date: string;
+  close_date: string | null;
+  as_of: string;
   hold_days: number;
+  shares: number;
+  price: number | null;
+  market_value: number | null;
   total_cost: number;
   total_proceeds: number;
-  gain_dollar: number;
+  dividends: number;
+  gain_dollar: number | null;
   gain_pct: number | null;
+  total_return: number | null;
+  spy_return: number | null;
+  qqq_return: number | null;
+  sector_etf_return: number | null;
+  excess_spy: number | null;
+  excess_qqq: number | null;
+  excess_sector: number | null;
   cagr: number | null;
   spy_cagr: number | null;
   qqq_cagr: number | null;
-  sector: string | null;
-  sector_etf: string | null;
   sector_etf_cagr: number | null;
   cagr_excess_spy: number | null;
   cagr_excess_qqq: number | null;
@@ -318,7 +414,27 @@ export interface ClosedPosition {
 export interface HistoryResponse {
   account: string;
   events: HistoryEvent[];
-  closed_positions: ClosedPosition[];
+  open_positions: Position[];
+  closed_positions: Position[];
+}
+
+export interface StockDetail extends Position {
+  curves: { stock: Series; SPY: Series; QQQ: Series; sector_etf: Series };
+  attribution: { market: number | null; sector: number | null; selection: number | null };
+  beta_spy: number | null;
+  beta_sector: number | null;
+  r_squared_spy: number | null;
+  r_squared_sector: number | null;
+}
+
+export interface TradeInput {
+  side: "BUY" | "SELL";
+  ticker: string;
+  trade_date: string;
+  price?: number;
+  dollars?: number;
+  shares?: number;
+  sector?: string;
 }
 
 export class ApiError extends Error {
@@ -344,8 +460,28 @@ async function get<T>(path: string): Promise<T> {
   return res.json();
 }
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const detail = Array.isArray(data.detail) ? data.detail[0]?.msg : data.detail;
+    throw new ApiError(res.status, detail ?? res.statusText);
+  }
+  return res.json();
+}
+
 export const api = {
   accounts: () => get<AccountInfo[]>("/api/accounts"),
+  sleeves: () => get<SleevesResponse>("/api/sleeves"),
+  stocks: (id: string) => get<{ account: string; stocks: StockDetail[] }>(`/api/accounts/${id}/stocks`),
+  marketHeatmap: (period: string) => get<MarketHeatmap>(`/api/market/heatmap?period=${period}`),
+  populateSleeve: (id: string, start_date: string, holdings: { ticker: string; sector?: string }[]) =>
+    post<{ status: string }>(`/api/sleeves/${id}/populate`, { start_date, holdings }),
+  recordTrade: (id: string, trade: TradeInput) => post<{ status: string }>(`/api/sleeves/${id}/trades`, trade),
   summary: (id: string) => get<Summary>(`/api/accounts/${id}/summary`),
   performance: (id: string, start?: string, end?: string) => {
     const q = new URLSearchParams();
@@ -356,16 +492,13 @@ export const api = {
   },
   holdings: (id: string) => get<HoldingsResponse>(`/api/accounts/${id}/holdings`),
   allocation: (id: string) => get<Allocation>(`/api/accounts/${id}/allocation`),
-  risk: (id: string) => get<RiskResponse>(`/api/accounts/${id}/risk`),
+  risk: (id: string, window: RiskWindow = "purchase") =>
+    get<RiskResponse>(`/api/accounts/${id}/risk?window=${window}`),
   heatmap: (id: string, period: string) =>
     get<HeatmapResponse>(`/api/accounts/${id}/heatmap?period=${period}`),
   transactions: (id: string) =>
     get<{ account: string; transactions: Txn[] }>(`/api/accounts/${id}/transactions`),
   history: (id: string) => get<HistoryResponse>(`/api/accounts/${id}/history`),
-  contributions: () =>
-    get<{ accounts: { account: string; value: number; invested: number; gain: number; twr: number | null }[] }>(
-      "/api/accounts/combined/contributions",
-    ),
   monteCarlo: (id: string, sims: number, seed?: number) => {
     const q = new URLSearchParams({ sims: String(sims) });
     if (seed !== undefined) q.set("seed", String(seed));

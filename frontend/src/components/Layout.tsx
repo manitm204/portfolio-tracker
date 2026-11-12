@@ -3,28 +3,89 @@ import { NavLink, Outlet } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { api } from "../api/client";
-import { useAppState } from "../state/AppState";
-import { fmtDateTime, fmtDate } from "../lib/format";
+import { PORTFOLIO, useAppState } from "../state/AppState";
+import { fmtDateTime, fmtDate, fmtSignedPct, signClass } from "../lib/format";
 
-const NAV = [
+const PORTFOLIO_NAV = [
   { to: "/", label: "Overview", icon: "◧" },
   { to: "/performance", label: "Performance", icon: "◺" },
   { to: "/holdings", label: "Holdings", icon: "☰" },
-  { to: "/heatmap", label: "Heatmap", icon: "▦" },
+  { to: "/heatmap", label: "Heatmaps", icon: "▦" },
   { to: "/risk", label: "Risk", icon: "◬" },
-  { to: "/transactions", label: "Transactions", icon: "⇄" },
   { to: "/history", label: "History", icon: "◷" },
+];
+
+const DATA_NAV = [
+  { to: "/transactions", label: "Transactions", icon: "⇄" },
   { to: "/data-quality", label: "Data Quality", icon: "✓" },
   { to: "/methodology", label: "Methodology", icon: "ℹ" },
 ];
 
+function NavGroups({ onNavigate }: { onNavigate?: () => void }) {
+  const sleeves = useQuery({ queryKey: ["sleeves"], queryFn: api.sleeves });
+  const link = (to: string, label: React.ReactNode, end: boolean, key: string) => (
+    <NavLink
+      key={key}
+      to={to}
+      end={end}
+      onClick={onNavigate}
+      className={({ isActive }) =>
+        clsx(
+          "rounded-md px-3 py-2 text-sm",
+          isActive ? "bg-[var(--grid)] font-semibold" : "text-[var(--text-secondary)] hover:bg-[var(--grid)]",
+        )
+      }
+    >
+      {label}
+    </NavLink>
+  );
+  const heading = (text: string) => (
+    <div className="mb-1 mt-4 px-3 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] first:mt-0">
+      {text}
+    </div>
+  );
+  const iconLabel = (icon: string, label: string) => (
+    <>
+      <span className="mr-2 opacity-60">{icon}</span>
+      {label}
+    </>
+  );
+  return (
+    <nav className="flex flex-col gap-1">
+      {heading("Portfolio")}
+      {PORTFOLIO_NAV.map((n) => link(n.to, iconLabel(n.icon, n.label), n.to === "/", n.to))}
+      {heading("Sleeves")}
+      {(sleeves.data?.sleeves ?? []).map((s) =>
+        link(
+          `/sleeves/${s.number}`,
+          <span className="flex items-center justify-between gap-2">
+            <span>
+              <span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: `var(--sleeve-${s.number})` }} />
+              {s.name}
+            </span>
+            {s.status === "active" ? (
+              <span className={clsx("tabular text-xs", signClass(s.total?.pct))}>{fmtSignedPct(s.total?.pct, 1)}</span>
+            ) : (
+              <span className="text-[10px] text-[var(--text-muted)]">empty</span>
+            )}
+          </span>,
+          false,
+          s.id,
+        ),
+      )}
+      {heading("Data")}
+      {DATA_NAV.map((n) => link(n.to, iconLabel(n.icon, n.label), false, n.to))}
+    </nav>
+  );
+}
+
 export default function Layout() {
-  const { accountId, dark, toggleTheme } = useAppState();
+  const { dark, toggleTheme } = useAppState();
   const [menuOpen, setMenuOpen] = useState(false);
   const qc = useQueryClient();
   const summary = useQuery({
-    queryKey: ["summary", accountId],
-    queryFn: () => api.summary(accountId),
+    queryKey: ["summary", PORTFOLIO],
+    queryFn: () => api.summary(PORTFOLIO),
     refetchInterval: 5 * 60_000,
   });
 
@@ -49,26 +110,7 @@ export default function Layout() {
       {/* Sidebar (desktop) */}
       <aside className="hidden w-52 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface-1)] p-4 md:flex">
         <div className="mb-6 text-lg font-bold">Portfolio<span className="text-[var(--series-portfolio)]">Tracker</span></div>
-        <nav className="flex flex-col gap-1">
-          {NAV.map((n) => (
-            <NavLink
-              key={n.to}
-              to={n.to}
-              end={n.to === "/"}
-              className={({ isActive }) =>
-                clsx(
-                  "rounded-md px-3 py-2 text-sm",
-                  isActive
-                    ? "bg-[var(--grid)] font-semibold"
-                    : "text-[var(--text-secondary)] hover:bg-[var(--grid)]",
-                )
-              }
-            >
-              <span className="mr-2 opacity-60">{n.icon}</span>
-              {n.label}
-            </NavLink>
-          ))}
-        </nav>
+        <NavGroups />
         <div className="mt-auto pt-6 text-xs text-[var(--text-muted)]">
           {fresh && (
             <>
@@ -125,21 +167,9 @@ export default function Layout() {
 
         {/* Mobile nav drawer */}
         {menuOpen && (
-          <nav className="flex flex-col gap-1 border-b border-[var(--border)] bg-[var(--surface-1)] p-3 md:hidden">
-            {NAV.map((n) => (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                end={n.to === "/"}
-                onClick={() => setMenuOpen(false)}
-                className={({ isActive }) =>
-                  clsx("rounded-md px-3 py-2 text-sm", isActive ? "bg-[var(--grid)] font-semibold" : "text-[var(--text-secondary)]")
-                }
-              >
-                {n.label}
-              </NavLink>
-            ))}
-          </nav>
+          <div className="border-b border-[var(--border)] bg-[var(--surface-1)] p-3 md:hidden">
+            <NavGroups onNavigate={() => setMenuOpen(false)} />
+          </div>
         )}
 
         <main className="min-w-0 flex-1 p-4 md:p-6">

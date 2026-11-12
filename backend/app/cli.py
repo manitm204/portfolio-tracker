@@ -1,7 +1,7 @@
 """Operational CLI.
 
 Usage (from backend/):
-    python -m app.cli bootstrap   # load seed book + one-time official-open hydration
+    python -m app.cli bootstrap   # load sleeves + one-time official-open hydration
     python -m app.cli refresh     # incremental market-data refresh
     python -m app.cli status      # bootstrap/refresh status summary
 """
@@ -14,7 +14,7 @@ import sys
 from .bootstrap import hydrate_all
 from .database import session_scope
 from .market_data import get_market_data_client
-from .ingestion import execute_equal_weight_rebalance, refresh_market_data
+from .ingestion import refresh_index_snapshot, refresh_market_data
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
@@ -49,28 +49,10 @@ def cmd_refresh() -> int:
     )
     for f in report.failures[:20]:
         print(f"  - {f}")
-    return 0 if report.status in ("success", "partial") else 1
-
-
-def cmd_rebalance_5() -> int:
-    """One-time swap: PORTFOLIO_5 CIEN/SPGI/ADSK -> ROST/NUE/ABBV, equal-weight."""
-    new_composition = [
-        ("GOOGL", "Communication Services"),
-        ("IBKR", "Financials"),
-        ("ROST", "Consumer Discretionary"),
-        ("NUE", "Materials"),
-        ("ABBV", "Health Care"),
-    ]
     with session_scope() as db, get_market_data_client() as client:
-        event = execute_equal_weight_rebalance(
-            db,
-            client,
-            "PORTFOLIO_5",
-            new_composition,
-            notes="Swapped CIEN, SPGI, ADSK for ROST, NUE, ABBV; rebalanced to equal weight.",
-        )
-    print(f"rebalance event #{event.id} on {event.event_date}")
-    return 0
+        index = refresh_index_snapshot(db, client)
+    print(f"index snapshot: {index['updated']} symbols, {len(index['failed'])} failed")
+    return 0 if report.status in ("success", "partial") else 1
 
 
 def cmd_status() -> int:
@@ -99,7 +81,6 @@ def main() -> int:
     return {
         "bootstrap": cmd_bootstrap,
         "refresh": cmd_refresh,
-        "rebalance5": cmd_rebalance_5,
         "status": cmd_status,
     }.get(cmd, cmd_status)()
 

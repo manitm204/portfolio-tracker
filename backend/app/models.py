@@ -57,10 +57,17 @@ class Account(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     display_name: Mapped[str] = mapped_column(String(128))
-    start_date: Mapped[dt.date] = mapped_column(Date)
+    # Null until the account is funded: a sleeve can exist before it has a
+    # first purchase date (``planned_start`` holds the intended month).
+    start_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     starting_cash: Mapped[float] = mapped_column(Float)
     benchmark_1: Mapped[str] = mapped_column(String(16), default="SPY")
     benchmark_2: Mapped[str] = mapped_column(String(16), default="QQQ")
+    sleeve_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    planned_start: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Archived accounts keep their ledger but are excluded from the portfolio,
+    # from price refreshes, and from every listing.
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ModelTarget(Base):
@@ -238,8 +245,12 @@ class IndexConstituent(Base):
     fetched_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow
     )
-
-
+    # Index heatmap snapshot (see ingestion.refresh_index_snapshot): the
+    # fund's published weight, plus period returns as JSON {period: return}.
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    period_returns: Mapped[str | None] = mapped_column(Text, nullable=True)
+    returns_as_of: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
 
 
 class BootstrapState(Base):

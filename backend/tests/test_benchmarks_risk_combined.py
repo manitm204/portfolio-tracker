@@ -9,7 +9,7 @@ import pytest
 from app.analytics import risk
 from app.analytics.data import ffill_with_coverage, trading_calendar
 from app.analytics.performance import twr_total, xirr
-from app.services import AccountContext, account_contributions
+from app.services import AccountContext, sleeves_payload
 
 from .conftest import D0, D1, D2, D3, add_bars, buy, deposit, make_account
 
@@ -72,9 +72,9 @@ def test_combined_equals_sum_of_accounts_every_date(db, spy_qqq):
     assert sim.loc[pd.Timestamp(D0), "flow"] == pytest.approx(1000.0)
     assert sim.loc[pd.Timestamp(D2), "flow"] == pytest.approx(500.0)
 
-    contrib = account_contributions(db)
-    assert {c["account"] for c in contrib} == {"A1", "A2"}
-    assert sum(c["value"] for c in contrib) == pytest.approx(
+    sleeves = sleeves_payload(db)["sleeves"]
+    assert {s["id"] for s in sleeves} == {"A1", "A2"}
+    assert sum(s["value"] for s in sleeves) == pytest.approx(
         float(combined.mv.iloc[-1]), abs=0.01
     )
 

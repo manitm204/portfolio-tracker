@@ -145,6 +145,38 @@ def period_returns_table(returns: pd.Series) -> dict[str, float | None]:
     return out
 
 
+def price_period_return(
+    series: pd.Series, period: str, end: pd.Timestamp
+) -> float | None:
+    """Simple return of a price series over ``period`` ending at ``end``.
+
+    ``SI`` uses the first observation as its base; ``MTD``/``YTD`` use the last
+    close before the month/year began. None when the history doesn't reach
+    back far enough, rather than a shorter return under a longer label.
+    """
+    ser = series.dropna()
+    if len(ser) < 2:
+        return None
+    if period == "1D":
+        return float(ser.iloc[-1] / ser.iloc[-2] - 1.0)
+    if period == "SI":
+        return float(ser.iloc[-1] / ser.iloc[0] - 1.0)
+    if period in ("MTD", "YTD"):
+        cutoff = end.replace(day=1) if period == "MTD" else end.replace(month=1, day=1)
+        base = ser[ser.index < cutoff]
+    else:
+        delta = {
+            "1W": pd.Timedelta(days=7),
+            "1M": pd.DateOffset(months=1),
+            "3M": pd.DateOffset(months=3),
+            "1Y": pd.DateOffset(years=1),
+        }[period]
+        base = ser[ser.index <= end - delta]
+    if base.empty:
+        return None
+    return float(ser.iloc[-1] / base.iloc[-1] - 1.0)
+
+
 def max_drawdown(returns: pd.Series) -> tuple[float | None, pd.Series]:
     """(max drawdown as a negative fraction, drawdown series)."""
     if returns.empty:

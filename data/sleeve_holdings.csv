@@ -1,0 +1,12 @@
+account_id,ticker,sector
+SLEEVE_1,INVH,Real Estate
+SLEEVE_1,PM,Consumer Staples
+SLEEVE_1,BAC,Financials
+SLEEVE_1,UNH,Health Care
+SLEEVE_1,GOOGL,Communication Services
+SLEEVE_1,VLO,Energy
+SLEEVE_2,ADSK,Information Technology
+SLEEVE_2,MAS,Industrials
+SLEEVE_2,BG,Consumer Staples
+SLEEVE_2,WFC,Financials
+SLEEVE_2,TSCO,Consumer Discretionary

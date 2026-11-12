@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import accounts, admin
+from .routers import accounts, admin, sleeves
 from .scheduler import create_scheduler
 
 logging.basicConfig(
@@ -40,6 +40,7 @@ app.add_middleware(
 
 app.include_router(accounts.router)
 app.include_router(admin.router)
+app.include_router(sleeves.router)
 
 
 @app.get("/api/health")

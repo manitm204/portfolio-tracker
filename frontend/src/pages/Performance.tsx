@@ -1,45 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { api, ApiError, MonteCarloResponse, RiskComparisonRow } from "../api/client";
-import { rangeToStart, useAppState } from "../state/AppState";
+import { api, ApiError, MonteCarloResponse } from "../api/client";
+import { PORTFOLIO, rangeToStart, useAccountId, useAppState } from "../state/AppState";
 import Chart, { SERIES, divergingScale } from "../components/Chart";
+import { StatsTable } from "../components/Comparison";
 import { EmptyState, ErrorState, SectionTitle, Skeleton } from "../components/Primitives";
 import { fmtNum, fmtPct, fmtSignedPct } from "../lib/format";
 
-const STATS_ROWS: { key: keyof RiskComparisonRow; label: string; fmt: (v: number | null) => string; signed?: boolean }[] = [
-  // Return
-  { key: "cagr", label: "CAGR", fmt: (v) => (v !== null ? fmtSignedPct(v) : "—"), signed: true },
-  // Risk
-  { key: "volatility", label: "Volatility (ann.)", fmt: (v) => (v !== null ? fmtPct(v) : "—") },
-  { key: "max_drawdown", label: "Max drawdown", fmt: (v) => (v !== null ? fmtPct(v) : "—"), signed: true },
-  // Risk-adjusted (own risk)
-  { key: "sharpe", label: "Sharpe", fmt: (v) => (v !== null ? fmtNum(v) : "—") },
-  { key: "sortino", label: "Sortino", fmt: (v) => (v !== null ? fmtNum(v) : "—") },
-  { key: "calmar", label: "Calmar", fmt: (v) => (v !== null ? fmtNum(v) : "—") },
-  // Relative to SPY
-  { key: "beta_spy", label: "Beta (vs SPY)", fmt: (v) => (v !== null ? fmtNum(v) : "—") },
-  { key: "r_squared_spy", label: "R² (vs SPY)", fmt: (v) => (v !== null ? fmtNum(v) : "—") },
-  { key: "correlation_spy", label: "Correlation (vs SPY)", fmt: (v) => (v !== null ? fmtNum(v) : "—") },
-  { key: "alpha_spy", label: "Alpha (vs SPY, ann.)", fmt: (v) => (v !== null ? fmtSignedPct(v) : "—"), signed: true },
-  { key: "information_ratio_spy", label: "Information ratio (vs SPY)", fmt: (v) => (v !== null ? fmtNum(v) : "—"), signed: true },
-];
-
-const MONTE_CARLO_ACCOUNTS = new Set(["PORTFOLIO_5"]);
-const MONTE_CARLO_DEFAULT_SIMS: Record<string, number> = {
-  PORTFOLIO_5: 50,
-};
-const MONTE_CARLO_HINT: Record<string, string> = {
-  PORTFOLIO_5:
-    "Compares the actual equal-weight portfolio to N random same-size stock picks from the S&P 500, all invested equally on the same inception date and held (buy-and-hold, adjusted-close pricing).",
-};
+const MONTE_CARLO_HINT =
+  "Compares the actual equal-weight sleeve to N random same-size stock picks from the S&P 500, all invested equally on the same start date and held (buy-and-hold, adjusted-close pricing).";
 
 const RANGES = ["SI", "YTD", "1M", "3M", "6M", "1Y", "custom"];
 const PERIOD_COLS = ["1D", "1W", "1M", "3M", "6M", "1Y", "YTD", "SI"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export default function Performance() {
-  const { accountId, range, setRange, customStart, customEnd, setCustom } = useAppState();
+  const accountId = useAccountId();
+  const { range, setRange, customStart, customEnd, setCustom } = useAppState();
   const [rollWin, setRollWin] = useState<"30" | "90" | "252">("30");
   const start = rangeToStart(range, customStart);
   const end = range === "custom" ? (customEnd ?? undefined) : undefined;
@@ -229,51 +207,7 @@ export default function Performance() {
             </table>
           </div>
 
-          <SectionTitle hint="Fixed since account inception, independent of the range selector above — the actual portfolio's own historical daily returns vs. SPY and QQQ's own returns over the same period. Ordered: return, risk, risk-adjusted ratios, then everything measured relative to SPY. CAGR is the geometrically compounded annual growth rate over the actual elapsed period; Calmar is CAGR / |max drawdown|. Beta, R², correlation, and alpha are all measured against SPY (SPY's own values vs. itself: beta 1.00, alpha 0.00, R² 1.00). R² is correlation² — the share of daily variance SPY explains; low R² means beta/alpha are less trustworthy. Information ratio is annualized excess return over SPY divided by tracking error (the volatility of that excess) — a risk-adjusted measure of edge over SPY that doesn't rely on the beta regression being stable.">
-            Since-inception statistics: Portfolio vs. SPY vs. QQQ
-          </SectionTitle>
-          <div className="card table-scroll">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-[var(--text-muted)]">
-                  <th className="p-2">Metric</th>
-                  <th className="p-2 text-right">Portfolio</th>
-                  <th className="p-2 text-right">SPY</th>
-                  <th className="p-2 text-right">QQQ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {!rc ? (
-                  <tr><td className="p-2 text-[var(--text-muted)]" colSpan={4}>Loading…</td></tr>
-                ) : (
-                  <>
-                    {STATS_ROWS.map(({ key, label, fmt, signed }) => (
-                      <tr key={key} className="border-t border-[var(--border)]">
-                        <td className="p-2 font-medium">{label}</td>
-                        {(["portfolio", "spy", "qqq"] as const).map((col) => {
-                          const v = rc[col][key];
-                          const cls = signed && v != null
-                            ? v > 0 ? "text-[var(--pos-text)]" : v < 0 ? "text-[var(--neg)]" : "text-[var(--text-muted)]"
-                            : "";
-                          return (
-                            <td key={col} className={clsx("p-2 text-right tabular", cls)}>
-                              {fmt(v)}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                    <tr className="border-t border-[var(--border)] text-xs text-[var(--text-muted)]">
-                      <td className="p-2">Observations</td>
-                      <td className="p-2 text-right tabular">{rc.portfolio.observations}</td>
-                      <td className="p-2 text-right tabular">{rc.spy.observations}</td>
-                      <td className="p-2 text-right tabular">{rc.qqq.observations}</td>
-                    </tr>
-                  </>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <StatsTable comparison={rc} label={accountId === PORTFOLIO ? "Portfolio" : "Sleeve"} />
 
           <CalendarHeatmap dates={p.calendar_heatmap.dates} values={p.calendar_heatmap.values} />
           <MonthlyHeatmap rows={p.monthly_heatmap} />
@@ -288,11 +222,11 @@ export default function Performance() {
 /** Stock picking vs random selection: actual portfolio against N random
  * same-size, equal-weight S&P 500 picks invested on the same inception date. */
 function MonteCarloSection({ accountId }: { accountId: string }) {
-  const supported = MONTE_CARLO_ACCOUNTS.has(accountId);
-  const [sims, setSims] = useState(MONTE_CARLO_DEFAULT_SIMS[accountId] ?? 50);
+  const supported = accountId !== PORTFOLIO;
+  const [sims, setSims] = useState(50);
 
   useEffect(() => {
-    setSims(MONTE_CARLO_DEFAULT_SIMS[accountId] ?? 50);
+    setSims(50);
   }, [accountId]);
 
   const q = useQuery({
@@ -305,7 +239,7 @@ function MonteCarloSection({ accountId }: { accountId: string }) {
 
   return (
     <>
-      <SectionTitle hint={`${MONTE_CARLO_HINT[accountId] ?? MONTE_CARLO_HINT.PORTFOLIO_5} Shows whether the stock picking beat random chance.`}>
+      <SectionTitle hint={`${MONTE_CARLO_HINT} Shows whether the stock picking beat random chance.`}>
         Monte Carlo: stock picking vs. random selection
       </SectionTitle>
       <div className="card p-3">

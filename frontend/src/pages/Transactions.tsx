@@ -2,14 +2,14 @@ import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { api, Txn } from "../api/client";
-import { useAppState } from "../state/AppState";
+import { useAccountId } from "../state/AppState";
 import { EmptyState, ErrorState, Skeleton } from "../components/Primitives";
 import { fmtDate, fmtMoney, fmtNum, signClass } from "../lib/format";
 
 const TYPES = ["ALL", "BUY", "SELL", "DIVIDEND", "DEPOSIT", "WITHDRAWAL", "FEE", "SPLIT", "SYMBOL_CHANGE"];
 
 export default function Transactions() {
-  const { accountId } = useAppState();
+  const accountId = useAccountId();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["transactions", accountId], queryFn: () => api.transactions(accountId) });
   const [search, setSearch] = useState("");

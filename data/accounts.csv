@@ -1,2 +1,5 @@
-account_id,display_name,start_date,starting_cash,benchmark_1,benchmark_2
-PORTFOLIO_5,$500 · 5 Stock Portfolio,2026-07-29,500,SPY,QQQ
+account_id,display_name,sleeve_number,start_date,planned_start,starting_cash,benchmark_1,benchmark_2
+SLEEVE_1,Sleeve 1,1,2026-10-01,,512.52,SPY,QQQ
+SLEEVE_2,Sleeve 2,2,2026-11-02,,512.52,SPY,QQQ
+SLEEVE_3,Sleeve 3,3,,2026-12,512.52,SPY,QQQ
+SLEEVE_4,Sleeve 4,4,,2027-01,512.52,SPY,QQQ
